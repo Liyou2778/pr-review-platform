@@ -278,7 +278,9 @@ async def process_run(run_id: int) -> dict:
                     # Findings are the product; a failed comment is a delivery
                     # problem, not a review problem. Record it and keep going.
                     comment_status = f"failed: {exc}"[:180]
-            elif to_post and not delivery_token:
+            elif to_post and not settings.github_dry_run and not delivery_token:
+                # Only a *real* delivery attempt without a credential is a
+                # failure; a dry run is expected to have no token at all.
                 comment_status = "failed: no github token configured"
 
             latency_ms = round((time.perf_counter() - started) * 1000.0, 1)
