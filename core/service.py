@@ -165,6 +165,16 @@ async def _previous_dedup_keys(session: AsyncSession, repo_id: int, pr_number: i
     return {r[0] for r in rows.all()}
 
 
+def _delivery_token(repo: Repo | None, settings) -> str:
+    """Prefer the repo-scoped token; fall back to the process token in dev.
+
+    Multi-tenant deployments must not share one credential across repos: a
+    leaked process token would grant write access to every connected repo.
+    """
+    scoped = open_token(repo.token_enc) if repo is not None else ""
+    return scoped or settings.github_token
+
+
 async def process_run(run_id: int) -> dict:
     """Execute one run end to end. Returns the stats dict (also persisted)."""
     settings = get_settings()
@@ -182,7 +192,7 @@ async def process_run(run_id: int) -> dict:
         try:
             cli_mode = (settings.ocr_mode or "fake").lower() == "cli"
             if cli_mode:
-                token = open_token(repo.token_enc) or settings.github_token
+                token = _delivery_token(repo, settings)
                 workspace = await prepare_workspace(
                     repo.clone_url, run.base_sha, run.head_sha, token=token
                 )
@@ -238,7 +248,8 @@ async def process_run(run_id: int) -> dict:
 
             comment_status = "skipped"
             to_post = [f for f in run.findings if not f.posted] + new_rows
-            if to_post and not settings.github_dry_run and settings.github_token:
+            delivery_token = _delivery_token(repo, settings)
+            if to_post and not settings.github_dry_run and delivery_token:
                 payload = build_review_payload(
                     run.head_sha,
                     [
@@ -257,7 +268,7 @@ async def process_run(run_id: int) -> dict:
                         repo.full_name,
                         run.pr_number,
                         payload,
-                        settings.github_token,
+                        delivery_token,
                         settings.github_api_base,
                     )
                     comment_status = "posted"
@@ -267,6 +278,8 @@ async def process_run(run_id: int) -> dict:
                     # Findings are the product; a failed comment is a delivery
                     # problem, not a review problem. Record it and keep going.
                     comment_status = f"failed: {exc}"[:180]
+            elif to_post and not delivery_token:
+                comment_status = "failed: no github token configured"
 
             latency_ms = round((time.perf_counter() - started) * 1000.0, 1)
             stats = {
@@ -411,8 +424,9 @@ async def post_run(run_id: int) -> dict:
         pending = [f for f in run.findings if not f.posted]
         if not pending:
             return {"posted": 0, "status": (run.stats or {}).get("comment_status", "nothing_to_post")}
-        if not settings.github_token:
-            raise ReviewError("GITHUB_TOKEN is empty; cannot deliver review", "post_no_token")
+        delivery_token = _delivery_token(repo, settings)
+        if not delivery_token:
+            raise ReviewError("no GitHub token configured for this repo", "post_no_token")
         payload = build_review_payload(
             run.head_sha,
             [
@@ -430,7 +444,7 @@ async def post_run(run_id: int) -> dict:
             repo.full_name if repo else "",
             run.pr_number,
             payload,
-            settings.github_token,
+            delivery_token,
             settings.github_api_base,
         )
         for finding in pending:

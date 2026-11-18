@@ -67,6 +67,15 @@ def open_token(sealed: str | None) -> str:
         return ""
 
 
+def verify_api_token(expected: str, provided: str | None) -> bool:
+    """Constant-time comparison for the API access token."""
+    if not expected:
+        return False
+    if not provided:
+        return False
+    return hmac.compare_digest(expected, provided.strip())
+
+
 def mask(secret: str, keep: int = 4) -> str:
     if not secret:
         return ""

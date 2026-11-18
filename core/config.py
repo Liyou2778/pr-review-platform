@@ -19,7 +19,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", populate_by_name=True
+    )
 
     app_name: str = "pr-review-platform"
     version: str = "0.1.0"
@@ -59,6 +61,37 @@ class Settings(BaseSettings):
 
     # --- crypto ---
     fernet_key: str = ""
+
+    # --- API hardening ---
+    # When set, every mutating /api/* call must carry X-API-Token.
+    api_token: str = ""
+    # Only these hosts may be cloned from (comma separated).
+    allowed_clone_hosts: str = "github.com"
+    # Hard cap for request bodies and diffs (bytes).
+    max_request_bytes: int = 2_000_000
+
+    @property
+    def allowed_hosts(self) -> set[str]:
+        return {h.strip().lower() for h in self.allowed_clone_hosts.split(",") if h.strip()}
+
+    def security_problems(self) -> list[str]:
+        """Configuration that is acceptable locally but not in production."""
+        problems: list[str] = []
+        if self.env in ("dev", "test"):
+            return problems
+        if self.github_webhook_secret in ("", "dev-secret", "change-me-in-local"):
+            problems.append("GITHUB_WEBHOOK_SECRET is missing or a dev default")
+        if not self.api_token:
+            problems.append("API_TOKEN is empty: mutating endpoints would be unauthenticated")
+        if not self.fernet_key:
+            problems.append("FERNET_KEY is empty: per-repo tokens cannot be stored encrypted")
+        return problems
+
+    def enforce_security(self) -> None:
+        """Fail fast at boot instead of discovering this after exposure."""
+        problems = self.security_problems()
+        if problems:
+            raise RuntimeError("insecure configuration: " + "; ".join(problems))
 
     @property
     def is_sqlite(self) -> bool:

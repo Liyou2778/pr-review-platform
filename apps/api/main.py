@@ -16,11 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core import analytics, service
 from core.adapters.github import GitHubError, fetch_diff, fetch_pull_request_meta, parse_webhook
 from core.adapters.reviewer import ReviewError
+from core.adapters.workspace import WorkspaceError, ensure_allowed_clone_url
 from core.config import get_settings
 from core.db import get_session, init_db
 from core.models import Feedback, Finding, Repo, Run
 from core.queue import get_queue
-from core.security import verify_signature
+from core.security import mask, seal_token, verify_api_token, verify_signature
 
 log = logging.getLogger(__name__)
 settings = get_settings()
@@ -56,6 +57,7 @@ class FeedbackRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    settings.enforce_security()  # fail fast in prod, no-op in dev/test
     for warning in settings.boot_warnings():
         log.warning("boot: %s", warning)
     log.info("%s v%s started (env=%s)", settings.app_name, settings.version, settings.env)
@@ -63,6 +65,37 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="PR Review Platform", version=settings.version, lifespan=lifespan)
+
+
+@app.middleware("http")
+async def guard_requests(request: Request, call_next):
+    """Two guard rails that must exist before this is exposed to a network.
+
+    1. Mutating ``/api/*`` calls require ``X-API-Token`` when ``API_TOKEN`` is
+       set; in non-dev environments an unset token is a hard refusal (503)
+       rather than an open door.
+    2. Declared request bodies above ``MAX_REQUEST_BYTES`` are rejected early.
+       Webhooks are exempt here because they are already HMAC-verified.
+    """
+    cfg = get_settings()
+    path = request.url.path
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and path.startswith("/api/"):
+        if cfg.api_token:
+            if not verify_api_token(cfg.api_token, request.headers.get("x-api-token")):
+                return JSONResponse(
+                    {"detail": "invalid or missing X-API-Token"}, status_code=401
+                )
+        elif cfg.env not in ("dev", "test"):
+            return JSONResponse(
+                {"detail": "API_TOKEN is not configured; refusing mutating calls"},
+                status_code=503,
+            )
+
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > cfg.max_request_bytes:
+        return JSONResponse({"detail": "request body too large"}, status_code=413)
+
+    return await call_next(request)
 
 
 @app.get("/")
@@ -163,6 +196,11 @@ async def replay(
 ) -> dict:
     """Re-run a review from a stored diff (demos, bench, CI replay)."""
     diff = body.diff
+    if body.clone_url:
+        try:
+            ensure_allowed_clone_url(body.clone_url, settings)
+        except WorkspaceError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     cli_mode = (settings.ocr_mode or "fake").lower() == "cli"
     if diff is None and not cli_mode:
         try:
@@ -270,6 +308,29 @@ async def post_feedback(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"id": feedback.id, "finding_id": finding_id, "verdict": feedback.verdict}
+
+
+class RepoTokenRequest(BaseModel):
+    token: str = Field(min_length=8)
+
+
+@app.put("/api/repos/{full_name:path}/token")
+async def set_repo_token(
+    full_name: str,
+    body: RepoTokenRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Store a repo-scoped credential (encrypted at rest).
+
+    Prefer this over one global token: a leaked process token must not grant
+    write access to every connected repository.
+    """
+    repo = await session.scalar(select(Repo).where(Repo.full_name == full_name))
+    if repo is None:
+        raise HTTPException(status_code=404, detail="repo not found")
+    repo.token_enc = seal_token(body.token)
+    await session.commit()
+    return {"repo": repo.full_name, "token_set": True, "token_hint": mask(body.token)}
 
 
 @app.get("/api/stats")

@@ -14,7 +14,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+from urllib.parse import urlparse
 
+from core.config import get_settings
 from core.tmp import workdir
 
 log = logging.getLogger(__name__)
@@ -24,6 +26,38 @@ class WorkspaceError(Exception):
     def __init__(self, message: str, error_type: str = "workspace_error") -> None:
         super().__init__(message)
         self.error_type = error_type
+
+
+def ensure_allowed_clone_url(clone_url: str, settings) -> None:
+    """Reject anything we would not deliberately clone.
+
+    Without this, an authenticated replay call becomes an SSRF primitive:
+    ``file:///C:/Users/...`` reads local repositories and arbitrary hosts turn
+    the worker into a proxy. Local paths stay usable in dev/test only.
+    """
+    if not clone_url:
+        return
+    parsed = urlparse(clone_url)
+
+    if parsed.scheme in ("http", "https"):
+        if parsed.scheme != "https":
+            raise WorkspaceError("only https clone urls are allowed", "clone_url_not_allowed")
+        host = (parsed.hostname or "").lower()
+        if host not in settings.allowed_hosts:
+            raise WorkspaceError(
+                f"clone host {host!r} is not in ALLOWED_CLONE_HOSTS", "clone_url_not_allowed"
+            )
+        return
+
+    if parsed.scheme == "file":
+        raise WorkspaceError("file:// clone urls are not allowed", "clone_url_not_allowed")
+
+    # A bare path (C:\repo or ./repo) is treated as local. Allow only in dev/test.
+    if settings.env in ("dev", "test"):
+        return
+    raise WorkspaceError(
+        "local clone paths are only allowed when APP_ENV is dev or test", "clone_url_not_allowed"
+    )
 
 
 def _auth_url(clone_url: str, token: str) -> str:
@@ -64,6 +98,7 @@ async def prepare_workspace(
     """
     if not clone_url:
         raise WorkspaceError("repo has no clone_url; cannot prepare a workspace", "no_clone_url")
+    ensure_allowed_clone_url(clone_url, get_settings())
 
     root = workdir("ocr-ws-")
     repo_dir = root / "repo"

@@ -105,6 +105,7 @@ async def run_once(timeout_s: float = 0.05) -> int | None:
 
 async def main() -> None:
     settings = get_settings()
+    settings.enforce_security()  # a worker with weak config must not start either
     await init_db()
     for warning in settings.boot_warnings():
         log.warning("boot: %s", warning)

@@ -111,6 +111,7 @@ GitHub ──webhook(HMAC)──► FastAPI ──► 唯一约束去重 ──�
 | POST | `/api/rules/candidates` | 提交规则候选（同规则只保留一个 draft） |
 | GET | `/api/rules/candidates?status=` | 候选列表 |
 | POST | `/api/rules/candidates/{id}/decision` | `approved｜rejected`（人工门禁） |
+| PUT | `/api/repos/{owner}/{repo}/token` | 写入 repo 级 token（加密落库，只回显掩码） |
 | GET | `/api/stats` | run 状态分布、token/成本、P50/P95、反馈分布 |
 | GET | `/api/dashboard` | 看板数据（JSON） |
 | GET | `/dashboard` | 看板页面（服务端渲染，无前端构建） |
@@ -179,6 +180,30 @@ http://127.0.0.1:8210/dashboard
 
 看板包含：run 状态分布、P50/P95、按仓库的 token/成本、findings 严重度分布、
 误报率、按规则聚类的误报（规则候选的来源）。
+
+## 安全模型（部署前必读）
+
+| 面 | 机制 | 配置 |
+|---|---|---|
+| webhook 真实性 | HMAC-SHA256 验签，失败即 401；缺失签名同样拒绝 | `GITHUB_WEBHOOK_SECRET` |
+| 变更接口鉴权 | 所有 `POST/PUT/PATCH/DELETE /api/*` 需要 `X-API-Token`；非 dev/test 未配置 token 直接 **503**（宁可不可用，不可裸奔） | `API_TOKEN` |
+| 启动校验 | 非 dev/test 下：secret 是默认值、缺 token、缺 `FERNET_KEY` → **进程启动失败** | `APP_ENV` |
+| clone 白名单 | 只允许 https + `ALLOWED_CLONE_HOSTS`；`file://` 一律拒绝；本地路径仅 dev/test（防 SSRF/本地文件读取） | `ALLOWED_CLONE_HOSTS` |
+| 凭据隔离 | 优先 repo 级 token（`PUT /api/repos/{owner}/{repo}/token`，Fernet 加密落库，只回显掩码），进程级 token 仅兜底 | `FERNET_KEY` |
+| 请求体上限 | 超过 `MAX_REQUEST_BYTES` 直接 413，避免大 payload 打爆 worker | `MAX_REQUEST_BYTES` |
+
+生产环境的最小配置：
+
+```bash
+APP_ENV=prod
+GITHUB_WEBHOOK_SECRET=<32 字节随机>
+API_TOKEN=<32 字节随机>
+FERNET_KEY=<Fernet key>
+GITHUB_DRY_RUN=false
+```
+
+> 注意：`API_TOKEN` 是服务级凭据，不是用户体系。要做多用户/多租户，下一步是引入 OIDC 或反向代理注入身份，
+> 当前设计只解决「谁可以调用变更接口」。
 
 ## 状态
 
