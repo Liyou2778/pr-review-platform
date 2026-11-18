@@ -114,22 +114,32 @@ async def run_stats(session: AsyncSession) -> dict:
         await session.execute(select(Run.status, func.count()).group_by(Run.status))
     ).all():
         by_status[str(status)] = int(count)
-    latencies = [
-        float(v)
-        for v in (
-            await session.execute(select(Run.latency_ms).where(Run.status == "completed"))
-        ).scalars()
-        if v
-    ]
-    engines: dict[str, int] = {}
-    for stats in (await session.execute(select(Run.stats))).scalars():
-        if isinstance(stats, dict) and stats.get("engine"):
-            engines[stats["engine"]] = engines.get(stats["engine"], 0) + 1
+
+    # Latency must be reported per engine: a 37ms deterministic run and a 19s
+    # model run are different SLOs, and averaging them produces a number that
+    # describes nothing.
+    rows = (
+        await session.execute(select(Run.latency_ms, Run.stats).where(Run.status == "completed"))
+    ).all()
+    all_latencies: list[float] = []
+    by_engine: dict[str, list[float]] = {}
+    for latency, stats in rows:
+        if not latency:
+            continue
+        engine = (stats or {}).get("engine") or "unknown"
+        all_latencies.append(float(latency))
+        by_engine.setdefault(str(engine), []).append(float(latency))
+
     return {
         "total": int(total),
         "by_status": by_status,
-        "engines": engines,
-        "latency_ms": metrics_mod.summarize(latencies),
+        "engines": {engine: len(values) for engine, values in by_engine.items()},
+        "latency_ms": {
+            "overall": metrics_mod.summarize(all_latencies),
+            "by_engine": {
+                engine: metrics_mod.summarize(values) for engine, values in sorted(by_engine.items())
+            },
+        },
     }
 
 

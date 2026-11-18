@@ -26,11 +26,14 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(".env")
 
-_tmp_db = workdir("e2e-ocr-") / "e2e.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_tmp_db.as_posix()}"
+# --live keeps the configured Postgres so the dashboard shows a real model run.
+LIVE = "--live" in sys.argv
+if not LIVE:
+    _tmp_db = workdir("e2e-ocr-") / "e2e.db"
+    os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_tmp_db.as_posix()}"
 os.environ["QUEUE_BACKEND"] = "db"
 os.environ["OCR_MODE"] = "cli"
-os.environ["APP_ENV"] = "test"  # NullPool, no dev warnings noise
+os.environ["APP_ENV"] = "test"  # NullPool, quieter logs
 
 from core.db import SessionLocal, engine, init_db  # noqa: E402
 from core.models import Repo, Run  # noqa: E402
@@ -46,6 +49,7 @@ async def main() -> int:
     parser.add_argument("--repo", default="tools/ocrdemo")
     parser.add_argument("--from", dest="base", default="HEAD~1")
     parser.add_argument("--to", dest="head", default="HEAD")
+    parser.add_argument("--live", action="store_true", help="use the configured Postgres instead of a temp SQLite")
     args = parser.parse_args()
 
     demo = (ROOT / args.repo).resolve()

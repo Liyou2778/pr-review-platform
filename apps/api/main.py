@@ -366,6 +366,11 @@ def _render_dashboard(data: dict) -> str:
     ) or "<tr><td colspan=3 class='muted'>no false positives recorded</td></tr>"
 
     latency = data["runs"]["latency_ms"]
+    latency_rows = "".join(
+        f"<tr><td>{esc(engine)}</td><td class='num'>{v['p50']:.0f}</td>"
+        f"<td class='num'>{v['p95']:.0f}</td><td class='num'>{v['count']}</td></tr>"
+        for engine, v in latency["by_engine"].items()
+    ) or "<tr><td colspan=4 class='muted'>no completed runs</td></tr>"
     engines = ", ".join(f"{esc(k)}={v}" for k, v in data["runs"]["engines"].items()) or "none"
 
     return f"""<!doctype html>
@@ -384,8 +389,9 @@ def _render_dashboard(data: dict) -> str:
 <h1>PR Review Platform</h1>
 <div class="sub">repo={data['repos']} · runs={data['runs']['total']} · engines={engines}</div>
 <div class="grid">
-  <div class="card"><h2>Latency (ms)</h2><div class="big">{latency['p95']}</div>
-    <div class="muted">p50 {latency['p50']} · avg {latency['avg']} · n={latency['count']}</div></div>
+  <div class="card"><h2>Latency by engine (ms)</h2><table>
+    <tr><td class="muted">engine</td><td class="muted num">p50</td><td class="muted num">p95</td><td class="muted num">n</td></tr>
+    {latency_rows}</table></div>
   <div class="card"><h2>Cost</h2><div class="big">${sum(r['cost_usd'] for r in data['cost_by_repo']):.4f}</div>
     <div class="muted">tokens in/out 见下表</div></div>
   <div class="card"><h2>False-positive rate</h2><div class="big">{feedback['false_positive_rate']:.1%}</div>
