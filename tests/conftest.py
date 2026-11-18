@@ -19,9 +19,12 @@ TMP = workdir("tests-")
 
 os.environ["APP_ENV"] = "test"
 # Default fast lane is SQLite; set TEST_DATABASE_URL to run the same contract
-# tests against Postgres (the production dialect).
-os.environ["DATABASE_URL"] = os.environ.get(
-    "TEST_DATABASE_URL", f"sqlite+aiosqlite:///{(TMP / 'test.db').as_posix()}"
+# tests against Postgres. Use `or` rather than a default argument: GitHub
+# Actions sets an *empty* string for the SQLite matrix entry, and
+# `os.environ.get(key, default)` would happily return "". Strip whitespace too.
+_test_url = (os.environ.get("TEST_DATABASE_URL") or "").strip()
+os.environ["DATABASE_URL"] = _test_url or (
+    f"sqlite+aiosqlite:///{(TMP / 'test.db').as_posix()}"
 )
 os.environ["QUEUE_BACKEND"] = "memory"
 os.environ["RULES_DIR"] = str(ROOT / "rules")
