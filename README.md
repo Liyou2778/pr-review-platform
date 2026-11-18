@@ -136,17 +136,27 @@ GitHub ──webhook(HMAC)──► FastAPI ──► 唯一约束去重 ──�
 
 ## 真实链路验证
 
-不是 mock：平台真的在一个 GitHub PR 上发了评审。
+不是 mock：平台真的收到了 GitHub 的 webhook，并在 PR 上发了评审。
 
-- 演示 PR：<https://github.com/Liyou2778/pr-review-demo/pull/1>
-- 结果：**1 条 review + 4 条行内评论**（blocker / high / high / medium），带规则 key 与严重度标签
-- 证据截图：[docs/github-pr.png](docs/github-pr.png)
+| 证据 | 链接 |
+|---|---|
+| 真实 webhook 演示 PR（干净版） | <https://github.com/Liyou2778/pr-review-demo/pull/2> |
+| 首轮验证 PR | <https://github.com/Liyou2778/pr-review-demo/pull/1> |
+| 截图 | [PR #2](docs/github-pr2.png) · [PR #1](docs/github-pr.png) |
 
-![真实 PR 评论](docs/github-pr.png)
+链路：`GitHub push → pull_request.synchronize → smee.io 转发 → POST /webhooks/github（HMAC 验签）
+→ 幂等 delivery → Redis 队列 → worker OCR/规则评审 → 行内评论回写`。
 
-这条链路验证了四件容易出错的事：webhook/replay 取到的 **head_sha 是真实 commit id**（否则 GitHub 返回
-`422 invalid $commitOID`）、评论按 **行号** 挂在正确位置、同一 finding **不重复发**、
-投递失败后可以 `POST /api/runs/{id}/post` **补发**（不重新评审、不重复计费）。
+实测（2026-11-19）：
+
+- 同一 PR 连续 4 次 commit → 4 个 run，**评论只增 3 条**（跨 run 去重生效，无重复刷屏）；
+- run 15：`findings=3 new=1`，只把新增的 blocker 发出去；
+- GitHub 投递状态：`pull_request.synchronize` / `opened` 均 200；
+- 失败态也验证过：smee 连接被重置期间的事件没进来，重启转发后补触发即恢复。
+
+> 这条链路验证了四件容易出错的事：head_sha 必须是真实 commit id（否则 422）、
+> 评论行号必须落在本次 diff 内（GitHub review 是原子的，一条越界全批 422）、
+> 同一 finding 不重复发、投递失败可 `POST /api/runs/{id}/post` 补发。
 
 ## 评测与看板
 
