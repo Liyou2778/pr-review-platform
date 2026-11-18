@@ -1,0 +1,42 @@
+version: 1
+owner: backend-platform
+rules:
+  - key: java-runtime-exec
+    severity: blocker
+    languages: [java]
+    paths: ["**/*.java"]
+    pattern: 'Runtime\.getRuntime\(\)\.exec\s*\('
+    message: "Runtime.exec 直接执行外部命令，参数可控时等于命令注入；请改为受控的进程调用并做白名单校验。"
+    fixtures:
+      positive: "Runtime.getRuntime().exec(cmd);"
+      negative: "ProcessBuilder pb = new ProcessBuilder(args);"
+
+  - key: java-sql-concat
+    severity: blocker
+    languages: [java]
+    paths: ["**/*.java"]
+    pattern: '(executeQuery|executeUpdate|execute)\s*\(\s*"[^"]*"\s*\+'
+    message: "字符串拼接 SQL 会导致注入；请使用 PreparedStatement 与参数占位符。"
+    fixtures:
+      positive: 'stmt.executeQuery("select * from t where id=" + id);'
+      negative: "stmt.executeQuery(\"select * from t where id=?\");"
+
+  - key: java-hardcoded-password
+    severity: blocker
+    languages: [java]
+    paths: ["**/*.java"]
+    pattern: '(?i)(password|passwd|secret|token)\s*=\s*"[^"]{8,}"'
+    message: "硬编码凭据会进入版本历史与构建产物；请改为配置中心或环境变量，并轮换该值。"
+    fixtures:
+      positive: 'String password = "Prod@12345";'
+      negative: "String password = System.getenv(\"DB_PASSWORD\");"
+
+  - key: java-printstacktrace
+    severity: low
+    languages: [java]
+    paths: ["**/*.java"]
+    pattern: '\.printStackTrace\s*\(\s*\)'
+    message: "printStackTrace 只写标准错误、丢失上下文；请使用结构化日志并保留堆栈。"
+    fixtures:
+      positive: "e.printStackTrace();"
+      negative: "log.error(\"load failed\", e);"

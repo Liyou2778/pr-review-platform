@@ -1,0 +1,42 @@
+version: 1
+owner: frontend-platform
+rules:
+  - key: ts-dangerously-set-inner-html
+    severity: high
+    languages: [typescript, javascript]
+    paths: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
+    pattern: 'dangerouslySetInnerHTML'
+    message: "dangerouslySetInnerHTML 会引入 XSS 面；若内容来自用户或第三方，请先做白名单清洗（DOMPurify）。"
+    fixtures:
+      positive: "<div dangerouslySetInnerHTML={{ __html: html }} />"
+      negative: "<div>{text}</div>"
+
+  - key: ts-innerhtml-assign
+    severity: high
+    languages: [typescript, javascript]
+    paths: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
+    pattern: '\.innerHTML\s*='
+    message: "直接赋值 innerHTML 会执行注入的脚本；请使用 textContent 或框架的安全绑定。"
+    fixtures:
+      positive: "el.innerHTML = userInput"
+      negative: "el.textContent = userInput"
+
+  - key: ts-eval-usage
+    severity: blocker
+    languages: [typescript, javascript]
+    paths: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
+    pattern: '(?<![A-Za-z0-9_$.])eval\s*\('
+    message: "eval() 破坏作用域与 CSP，且可执行任意代码；请改用 JSON.parse 或显式逻辑。"
+    fixtures:
+      positive: "eval(code)"
+      negative: "JSON.parse(code)"
+
+  - key: ts-hardcoded-token
+    severity: blocker
+    languages: [typescript, javascript]
+    paths: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
+    pattern: '(?i)(api[_-]?key|token|secret)\s*[:=]\s*["''][A-Za-z0-9_\-\.]{16,}["'']'
+    message: "前端代码中的硬编码 token 会随打包产物泄露；请改为后端签发或环境变量注入。"
+    fixtures:
+      positive: 'const token = "tok_demo_1234567890abcdef"'
+      negative: "const token = process.env.TOKEN"

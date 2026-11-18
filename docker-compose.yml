@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: prreview
+      POSTGRES_PASSWORD: prreview
+      POSTGRES_DB: prreview
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prreview -d prreview"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    command: ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8210"]
+    environment: &appenv
+      APP_ENV: docker
+      DATABASE_URL: postgresql+asyncpg://prreview:prreview@postgres:5432/prreview
+      QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379/0
+      RULES_DIR: /app/rules
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-dev-secret}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_DRY_RUN: ${GITHUB_DRY_RUN:-true}
+      OCR_MODE: ${OCR_MODE:-fake}
+      FERNET_KEY: ${FERNET_KEY:-}
+    ports:
+      - "8210:8210"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: ["python", "-m", "apps.worker.main"]
+    environment: *appenv
+    # The image healthcheck probes the HTTP API; a worker has no HTTP port,
+    # so inheriting it would mark every worker unhealthy forever.
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+
+volumes:
+  pgdata:
+  redisdata:

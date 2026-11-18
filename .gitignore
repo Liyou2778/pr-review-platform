@@ -1,0 +1,19 @@
+.env
+.env.local
+data/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+out/
+*.log
+
+# local binaries + runtime state (large, machine-specific)
+tools/
+ocr-out-*/
+
+prreview-tests-*
+*.egg-info/
+
+.tmp/

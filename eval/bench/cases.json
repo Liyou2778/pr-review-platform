@@ -1,0 +1,141 @@
+{
+  "version": 2,
+  "description": "20 labelled PR snapshots (Python / TypeScript / Java). truth.rule_key='any' = line-level matching so the same cases can score the deterministic engine and the OCR engine. Geometry convention: hunk starts at line 1 (or 10), context line then the added line, so the added line is at start+1.",
+  "cases": [
+    {
+      "id": "py-eval",
+      "name": "eval 任意代码执行",
+      "diff": "diff --git a/app/mod.py b/app/mod.py\n--- a/app/mod.py\n+++ b/app/mod.py\n@@ -1,1 +1,2 @@\n def handle(user_input):\n+    return eval(user_input)\n",
+      "truth": [{"file": "app/mod.py", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "eval"}]
+    },
+    {
+      "id": "py-secret",
+      "name": "硬编码凭据",
+      "diff": "diff --git a/app/settings.py b/app/settings.py\n--- a/app/settings.py\n+++ b/app/settings.py\n@@ -1,1 +1,2 @@\n import os\n+API_KEY = \"demo-key-1234567890abcdef\"\n",
+      "truth": [{"file": "app/settings.py", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "hardcoded key"}]
+    },
+    {
+      "id": "py-shell",
+      "name": "shell=True 命令注入",
+      "diff": "diff --git a/app/tools.py b/app/tools.py\n--- a/app/tools.py\n+++ b/app/tools.py\n@@ -1,1 +1,2 @@\n def run(cmd):\n+    subprocess.run(cmd, shell=True)\n",
+      "truth": [{"file": "app/tools.py", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "shell=True"}]
+    },
+    {
+      "id": "py-bare-except",
+      "name": "裸 except",
+      "diff": "diff --git a/app/io.py b/app/io.py\n--- a/app/io.py\n+++ b/app/io.py\n@@ -1,1 +1,2 @@\n     try:\n+        except:\n",
+      "truth": [{"file": "app/io.py", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "bare except"}]
+    },
+    {
+      "id": "py-http-timeout",
+      "name": "HTTP 无超时",
+      "diff": "diff --git a/app/client.py b/app/client.py\n--- a/app/client.py\n+++ b/app/client.py\n@@ -1,1 +1,2 @@\n def fetch(url):\n+    return requests.get(url)\n",
+      "truth": [{"file": "app/client.py", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "no timeout"}]
+    },
+    {
+      "id": "py-pickle",
+      "name": "pickle 反序列化",
+      "diff": "diff --git a/app/cache.py b/app/cache.py\n--- a/app/cache.py\n+++ b/app/cache.py\n@@ -1,1 +1,2 @@\n def load(raw):\n+    return pickle.loads(raw)\n",
+      "truth": [{"file": "app/cache.py", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "pickle.loads"}]
+    },
+    {
+      "id": "py-yaml",
+      "name": "yaml.load 未指定 Loader",
+      "diff": "diff --git a/app/conf.py b/app/conf.py\n--- a/app/conf.py\n+++ b/app/conf.py\n@@ -1,1 +1,2 @@\n def parse(text):\n+    return yaml.load(text)\n",
+      "truth": [{"file": "app/conf.py", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "yaml.load"}]
+    },
+    {
+      "id": "py-eval-shell",
+      "name": "eval + shell 两个缺陷",
+      "diff": "diff --git a/app/flow.py b/app/flow.py\n--- a/app/flow.py\n+++ b/app/flow.py\n@@ -1,1 +1,2 @@\n def calc(raw):\n+    return eval(raw)\n@@ -10,1 +10,2 @@\n def run(cmd):\n+    subprocess.run(cmd, shell=True)\n",
+      "truth": [
+        {"file": "app/flow.py", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "eval"},
+        {"file": "app/flow.py", "line_start": 11, "line_end": 11, "rule_key": "any", "note": "shell"}
+      ]
+    },
+    {
+      "id": "py-pickle-yaml",
+      "name": "pickle + yaml 两个缺陷",
+      "diff": "diff --git a/app/codec.py b/app/codec.py\n--- a/app/codec.py\n+++ b/app/codec.py\n@@ -1,1 +1,2 @@\n def decode(raw):\n+    return pickle.loads(raw)\n@@ -10,1 +10,2 @@\n def parse(text):\n+    return yaml.load(text)\n",
+      "truth": [
+        {"file": "app/codec.py", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "pickle"},
+        {"file": "app/codec.py", "line_start": 11, "line_end": 11, "rule_key": "any", "note": "yaml"}
+      ]
+    },
+    {
+      "id": "ts-dangerous-html",
+      "name": "dangerouslySetInnerHTML",
+      "diff": "diff --git a/web/comp.tsx b/web/comp.tsx\n--- a/web/comp.tsx\n+++ b/web/comp.tsx\n@@ -1,1 +1,2 @@\n   return (\n+    <div dangerouslySetInnerHTML={{ __html: html }} />\n",
+      "truth": [{"file": "web/comp.tsx", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "XSS"}]
+    },
+    {
+      "id": "ts-innerhtml",
+      "name": "innerHTML 赋值",
+      "diff": "diff --git a/web/dom.ts b/web/dom.ts\n--- a/web/dom.ts\n+++ b/web/dom.ts\n@@ -1,1 +1,2 @@\n export function paint(el: HTMLElement, v: string) {\n+  el.innerHTML = v;\n",
+      "truth": [{"file": "web/dom.ts", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "innerHTML"}]
+    },
+    {
+      "id": "ts-eval",
+      "name": "前端 eval",
+      "diff": "diff --git a/web/run.ts b/web/run.ts\n--- a/web/run.ts\n+++ b/web/run.ts\n@@ -1,1 +1,2 @@\n export function run(code: string) {\n+  return eval(code);\n",
+      "truth": [{"file": "web/run.ts", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "eval"}]
+    },
+    {
+      "id": "ts-token",
+      "name": "前端硬编码 token",
+      "diff": "diff --git a/web/api.ts b/web/api.ts\n--- a/web/api.ts\n+++ b/web/api.ts\n@@ -1,1 +1,2 @@\n const base = \"/api\";\n+const token = \"tok_demo_1234567890abcdef\";\n",
+      "truth": [{"file": "web/api.ts", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "token"}]
+    },
+    {
+      "id": "ts-two-xss",
+      "name": "两处 XSS",
+      "diff": "diff --git a/web/view.tsx b/web/view.tsx\n--- a/web/view.tsx\n+++ b/web/view.tsx\n@@ -1,1 +1,2 @@\n   return (\n+    <div dangerouslySetInnerHTML={{ __html: html }} />\n@@ -10,1 +10,2 @@\n export function mount(node: HTMLElement) {\n+  node.innerHTML = userInput;\n",
+      "truth": [
+        {"file": "web/view.tsx", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "dangerouslySetInnerHTML"},
+        {"file": "web/view.tsx", "line_start": 11, "line_end": 11, "rule_key": "any", "note": "innerHTML"}
+      ]
+    },
+    {
+      "id": "java-exec",
+      "name": "Runtime.exec",
+      "diff": "diff --git a/src/main/java/com/acme/Shell.java b/src/main/java/com/acme/Shell.java\n--- a/src/main/java/com/acme/Shell.java\n+++ b/src/main/java/com/acme/Shell.java\n@@ -1,1 +1,2 @@\n public class Shell {\n+    public void run(String cmd) throws Exception { Runtime.getRuntime().exec(cmd); }\n",
+      "truth": [{"file": "src/main/java/com/acme/Shell.java", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "exec"}]
+    },
+    {
+      "id": "java-sql",
+      "name": "SQL 字符串拼接",
+      "diff": "diff --git a/src/main/java/com/acme/Repo.java b/src/main/java/com/acme/Repo.java\n--- a/src/main/java/com/acme/Repo.java\n+++ b/src/main/java/com/acme/Repo.java\n@@ -1,1 +1,2 @@\n public class Repo {\n+    void find(Statement stmt, String id) throws Exception { stmt.executeQuery(\"select * from t where id=\" + id); }\n",
+      "truth": [{"file": "src/main/java/com/acme/Repo.java", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "sql concat"}]
+    },
+    {
+      "id": "java-password",
+      "name": "硬编码密码",
+      "diff": "diff --git a/src/main/java/com/acme/Config.java b/src/main/java/com/acme/Config.java\n--- a/src/main/java/com/acme/Config.java\n+++ b/src/main/java/com/acme/Config.java\n@@ -1,1 +1,2 @@\n public class Config {\n+    private static final String password = \"Prod@123456\";\n",
+      "truth": [{"file": "src/main/java/com/acme/Config.java", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "password"}]
+    },
+    {
+      "id": "java-printstack",
+      "name": "printStackTrace",
+      "diff": "diff --git a/src/main/java/com/acme/Service.java b/src/main/java/com/acme/Service.java\n--- a/src/main/java/com/acme/Service.java\n+++ b/src/main/java/com/acme/Service.java\n@@ -1,1 +1,2 @@\n public class Service {\n+    void fail() { e.printStackTrace(); }\n",
+      "truth": [{"file": "src/main/java/com/acme/Service.java", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "printStackTrace"}]
+    },
+    {
+      "id": "java-exec-password",
+      "name": "exec + 硬编码密码",
+      "diff": "diff --git a/src/main/java/com/acme/Danger.java b/src/main/java/com/acme/Danger.java\n--- a/src/main/java/com/acme/Danger.java\n+++ b/src/main/java/com/acme/Danger.java\n@@ -1,1 +1,2 @@\n public class Danger {\n+    void a(String cmd) throws Exception { Runtime.getRuntime().exec(cmd); }\n@@ -10,1 +10,2 @@\n public class Danger {\n+    private static final String secret = \"abcdef123456\";\n",
+      "truth": [
+        {"file": "src/main/java/com/acme/Danger.java", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "exec"},
+        {"file": "src/main/java/com/acme/Danger.java", "line_start": 11, "line_end": 11, "rule_key": "any", "note": "secret"}
+      ]
+    },
+    {
+      "id": "py-eval-timeout",
+      "name": "eval + HTTP 无超时",
+      "diff": "diff --git a/app/mix.py b/app/mix.py\n--- a/app/mix.py\n+++ b/app/mix.py\n@@ -1,1 +1,2 @@\n def handle(raw):\n+    return eval(raw)\n@@ -10,1 +10,2 @@\n def fetch(url):\n+    return requests.get(url)\n",
+      "truth": [
+        {"file": "app/mix.py", "line_start": 2, "line_end": 2, "rule_key": "any", "note": "eval"},
+        {"file": "app/mix.py", "line_start": 11, "line_end": 11, "rule_key": "any", "note": "no timeout"}
+      ]
+    }
+  ]
+}

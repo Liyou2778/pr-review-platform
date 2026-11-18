@@ -1,0 +1,441 @@
+"""FastAPI entrypoint: webhook intake, run/finding queries, feedback, metrics."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from core import analytics, service
+from core.adapters.github import fetch_diff, parse_webhook
+from core.config import get_settings
+from core.db import get_session, init_db
+from core.models import Feedback, Finding, Repo, Run
+from core.queue import get_queue
+from core.security import verify_signature
+
+log = logging.getLogger(__name__)
+settings = get_settings()
+
+FEEDBACK_VERDICTS = {"false_positive", "fixed", "ignored", "agreed"}
+
+
+async def _enqueue(run_id: int) -> None:
+    """Best-effort enqueue. The run is already committed, so a broker outage
+    degrades latency (worker's DB fallback picks it up) instead of losing work."""
+    try:
+        await get_queue().push(run_id)
+    except Exception as exc:  # noqa: BLE001 - broker must not 500 the request
+        log.warning("enqueue failed for run %s: %s", run_id, exc)
+
+
+class ReplayRequest(BaseModel):
+    repo_full_name: str = Field(min_length=3)
+    pr_number: int = Field(ge=1)
+    diff: str | None = None
+    clone_url: str = ""
+    base_sha: str = "base"
+    head_sha: str | None = None
+    trigger: str = "replay"
+
+
+class FeedbackRequest(BaseModel):
+    verdict: str
+    actor: str = ""
+    note: str = ""
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    for warning in settings.boot_warnings():
+        log.warning("boot: %s", warning)
+    log.info("%s v%s started (env=%s)", settings.app_name, settings.version, settings.env)
+    yield
+
+
+app = FastAPI(title="PR Review Platform", version=settings.version, lifespan=lifespan)
+
+
+@app.get("/")
+async def index() -> dict:
+    return {
+        "name": settings.app_name,
+        "version": settings.version,
+        "endpoints": [
+            "POST /webhooks/github",
+            "POST /api/replay",
+            "GET /api/runs",
+            "GET /api/runs/{id}",
+            "GET /api/runs/{id}/findings",
+            "POST /api/runs/{id}/retry",
+            "POST /api/findings/{id}/feedback",
+            "GET /api/stats",
+            "GET /healthz",
+        ],
+    }
+
+
+@app.get("/healthz")
+async def healthz(session: AsyncSession = Depends(get_session)) -> dict:
+    await session.execute(select(1))
+    return {
+        "status": "ok",
+        "version": settings.version,
+        "env": settings.env,
+        "queue": settings.queue_backend,
+        "storage": "sqlite" if settings.is_sqlite else "postgres",
+        "reviewer": settings.ocr_mode,
+        "dry_run": settings.github_dry_run,
+    }
+
+
+@app.post("/webhooks/github", status_code=202)
+async def github_webhook(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> JSONResponse:
+    body = await request.body()
+    signature = request.headers.get("x-hub-signature-256")
+    if not verify_signature(settings.github_webhook_secret, body, signature):
+        raise HTTPException(status_code=401, detail="invalid webhook signature")
+
+    try:
+        payload = json.loads(body or b"{}")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid JSON payload: {exc}") from exc
+
+    event = request.headers.get("x-github-event", "")
+    delivery_id = request.headers.get("x-github-delivery") or hashlib.sha256(body).hexdigest()
+    pr_event = parse_webhook(event, payload)
+    repo_full_name = (payload.get("repository") or {}).get("full_name", "")
+
+    if pr_event is None:
+        return JSONResponse({"ignored": True, "reason": f"event={event!r} action={payload.get('action')!r}"})
+
+    is_new = await service.record_delivery(
+        session,
+        delivery_id=delivery_id,
+        event=event,
+        action=pr_event.action,
+        repo_full_name=repo_full_name,
+        payload_hash=hashlib.sha256(body).hexdigest(),
+    )
+    if not is_new:
+        return JSONResponse({"duplicate": True, "delivery_id": delivery_id}, status_code=200)
+
+    repo = await service.ensure_repo(
+        session,
+        pr_event.repo_full_name,
+        (payload.get("repository") or {}).get("default_branch", "main"),
+        clone_url=pr_event.clone_url,
+    )
+    run, created = await service.create_run(
+        session,
+        repo=repo,
+        pr_number=pr_event.pr_number,
+        base_sha=pr_event.base_sha,
+        head_sha=pr_event.head_sha,
+        trigger="webhook",
+    )
+    await session.commit()
+
+    if created:
+        await _enqueue(run.id)
+    return JSONResponse(
+        {"run_id": run.id, "status": run.status, "created": created, "pr": pr_event.pr_number},
+        status_code=202 if created else 200,
+    )
+
+
+@app.post("/api/replay", status_code=202)
+async def replay(
+    body: ReplayRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Re-run a review from a stored diff (demos, bench, CI replay)."""
+    diff = body.diff
+    cli_mode = (settings.ocr_mode or "fake").lower() == "cli"
+    if diff is None and not cli_mode:
+        try:
+            diff = await fetch_diff(body.repo_full_name, body.pr_number)
+        except Exception as exc:  # noqa: BLE001 - surface as a 400, not a 500
+            raise HTTPException(status_code=400, detail=f"cannot fetch diff: {exc}") from exc
+
+    seed = diff or f"{body.repo_full_name}:{body.pr_number}:{body.head_sha or ''}"
+    head_sha = body.head_sha or hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
+    repo = await service.ensure_repo(session, body.repo_full_name, clone_url=body.clone_url)
+    run, created = await service.create_run(
+        session,
+        repo=repo,
+        pr_number=body.pr_number,
+        base_sha=body.base_sha,
+        head_sha=head_sha,
+        trigger=body.trigger,
+        diff_text=diff,
+    )
+    await session.commit()
+    if created:
+        await _enqueue(run.id)
+    return {"run_id": run.id, "status": run.status, "created": created}
+
+
+@app.get("/api/runs")
+async def list_runs(
+    limit: int = Query(20, ge=1, le=200),
+    status: str | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    stmt = select(Run).order_by(Run.id.desc()).limit(limit)
+    if status:
+        stmt = stmt.where(Run.status == status)
+    runs = (await session.scalars(stmt)).all()
+    return {"items": [_run_dict(run) for run in runs], "count": len(runs)}
+
+
+@app.get("/api/runs/{run_id}")
+async def get_run(run_id: int, session: AsyncSession = Depends(get_session)) -> dict:
+    run = await session.get(Run, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    data = _run_dict(run)
+    data["findings"] = [_finding_dict(f) for f in run.findings]
+    return data
+
+
+@app.get("/api/runs/{run_id}/findings")
+async def run_findings(run_id: int, session: AsyncSession = Depends(get_session)) -> dict:
+    run = await session.get(Run, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return {"run_id": run_id, "items": [_finding_dict(f) for f in run.findings]}
+
+
+@app.post("/api/runs/{run_id}/retry", status_code=202)
+async def retry_run(run_id: int, session: AsyncSession = Depends(get_session)) -> dict:
+    run = await session.get(Run, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    if run.status in service.ACTIVE_STATUSES:
+        raise HTTPException(status_code=409, detail=f"run is {run.status}")
+    run.status = "queued"
+    run.error = None
+    run.error_type = None
+    run.ended_at = None
+    await session.commit()
+    await _enqueue(run.id)
+    return {"run_id": run.id, "status": "queued"}
+
+
+@app.post("/api/findings/{finding_id}/feedback")
+async def post_feedback(
+    finding_id: int,
+    body: FeedbackRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    if body.verdict not in FEEDBACK_VERDICTS:
+        raise HTTPException(status_code=422, detail=f"verdict must be one of {sorted(FEEDBACK_VERDICTS)}")
+    try:
+        feedback = await service.add_feedback(
+            session, finding_id, body.verdict, body.actor, body.note
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"id": feedback.id, "finding_id": finding_id, "verdict": feedback.verdict}
+
+
+@app.get("/api/stats")
+async def stats(session: AsyncSession = Depends(get_session)) -> dict:
+    return await service.overview(session)
+
+
+@app.get("/api/dashboard")
+async def dashboard_data(session: AsyncSession = Depends(get_session)) -> dict:
+    return await analytics.dashboard(session)
+
+
+@app.get("/api/feedback/clusters")
+async def feedback_clusters(session: AsyncSession = Depends(get_session)) -> dict:
+    return {"items": await analytics.feedback_clusters(session)}
+
+
+class CandidateRequest(BaseModel):
+    rule_key: str = Field(min_length=2)
+    note: str = ""
+    owner: str = ""
+    action_hint: str = "review-rule"
+
+
+class DecisionRequest(BaseModel):
+    status: str
+    owner: str = ""
+
+
+@app.post("/api/rules/candidates", status_code=201)
+async def create_candidate(
+    body: CandidateRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    candidate, created = await service.propose_rule_candidate(
+        session, body.rule_key, body.note, body.owner, body.action_hint
+    )
+    return {
+        "id": candidate.id,
+        "rule_key": candidate.rule_key,
+        "status": candidate.status,
+        "created": created,
+    }
+
+
+@app.get("/api/rules/candidates")
+async def list_candidates(
+    status: str | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    items = await service.list_rule_candidates(session, status)
+    return {
+        "items": [
+            {
+                "id": c.id,
+                "rule_key": c.rule_key,
+                "status": c.status,
+                "action_hint": c.action_hint,
+                "owner": c.owner,
+                "note": c.note,
+                "created_at": c.created_at,
+                "decided_at": c.decided_at,
+            }
+            for c in items
+        ]
+    }
+
+
+@app.post("/api/rules/candidates/{candidate_id}/decision")
+async def decide_candidate(
+    candidate_id: int,
+    body: DecisionRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    try:
+        candidate = await service.decide_rule_candidate(
+            session, candidate_id, body.status, body.owner
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"id": candidate.id, "status": candidate.status, "decided_at": candidate.decided_at}
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page(session: AsyncSession = Depends(get_session)) -> str:
+    data = await analytics.dashboard(session)
+    return _render_dashboard(data)
+
+
+def _render_dashboard(data: dict) -> str:
+    """Server-rendered dashboard: no npm, no build, no client state to trust."""
+    import html as html_mod
+
+    def esc(value) -> str:
+        return html_mod.escape(str(value))
+
+    severity_rows = "".join(
+        f"<tr><td>{esc(k)}</td><td class='num'>{v}</td></tr>"
+        for k, v in sorted(data["findings_by_severity"].items())
+    ) or "<tr><td colspan=2 class='muted'>no findings yet</td></tr>"
+
+    cost_rows = "".join(
+        f"<tr><td>{esc(r['repo'])}</td><td class='num'>{r['runs']}</td>"
+        f"<td class='num'>{r['tokens_in']}/{r['tokens_out']}</td>"
+        f"<td class='num'>${r['cost_usd']:.4f}</td></tr>"
+        for r in data["cost_by_repo"]
+    ) or "<tr><td colspan=4 class='muted'>no runs yet</td></tr>"
+
+    feedback = data["feedback"]
+    verdict_bits = ", ".join(f"{esc(k)}={v}" for k, v in feedback["by_verdict"].items()) or "none"
+    cluster_rows = "".join(
+        f"<tr><td>{esc(c['rule_key'])}</td><td class='num'>{c['feedback_count']}</td>"
+        f"<td>{esc(c['action_hint'])}</td></tr>"
+        for c in data["clusters"]
+    ) or "<tr><td colspan=3 class='muted'>no false positives recorded</td></tr>"
+
+    latency = data["runs"]["latency_ms"]
+    engines = ", ".join(f"{esc(k)}={v}" for k, v in data["runs"]["engines"].items()) or "none"
+
+    return f"""<!doctype html>
+<html lang="zh"><head><meta charset="utf-8">
+<title>PR Review Platform · Dashboard</title>
+<style>
+ body{{font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#0f1115;color:#e6e6e6;margin:0;padding:32px}}
+ h1{{font-size:20px;margin:0 0 4px}} .sub{{color:#8b8f98;margin-bottom:24px}}
+ .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}}
+ .card{{background:#171a21;border:1px solid #232838;border-radius:10px;padding:16px}}
+ .card h2{{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:#8b8f98;margin:0 0 12px}}
+ table{{width:100%;border-collapse:collapse}} td{{padding:6px 10px 6px 0;border-bottom:1px solid #232838}}
+ td.num{{text-align:right;font-variant-numeric:tabular-nums}}
+ .muted{{color:#6b7280}} .big{{font-size:26px;font-weight:600}}
+</style></head><body>
+<h1>PR Review Platform</h1>
+<div class="sub">repo={data['repos']} · runs={data['runs']['total']} · engines={engines}</div>
+<div class="grid">
+  <div class="card"><h2>Latency (ms)</h2><div class="big">{latency['p95']}</div>
+    <div class="muted">p50 {latency['p50']} · avg {latency['avg']} · n={latency['count']}</div></div>
+  <div class="card"><h2>Cost</h2><div class="big">${sum(r['cost_usd'] for r in data['cost_by_repo']):.4f}</div>
+    <div class="muted">tokens in/out 见下表</div></div>
+  <div class="card"><h2>False-positive rate</h2><div class="big">{feedback['false_positive_rate']:.1%}</div>
+    <div class="muted">{verdict_bits}</div></div>
+</div>
+<div class="grid" style="margin-top:16px">
+  <div class="card"><h2>Findings by severity</h2><table>{severity_rows}</table></div>
+  <div class="card"><h2>Cost by repo</h2><table>
+    <tr><td class="muted">repo</td><td class="muted num">runs</td><td class="muted num">tok in/out</td><td class="muted num">usd</td></tr>
+    {cost_rows}</table></div>
+  <div class="card"><h2>False-positive clusters</h2><table>
+    <tr><td class="muted">rule</td><td class="muted num">hits</td><td class="muted">action</td></tr>
+    {cluster_rows}</table></div>
+</div>
+</body></html>"""
+
+
+def _run_dict(run: Run) -> dict:
+    return {
+        "id": run.id,
+        "repo": run.repo.full_name if run.repo else None,
+        "pr_number": run.pr_number,
+        "head_sha": run.head_sha,
+        "trigger": run.trigger,
+        "status": run.status,
+        "latency_ms": run.latency_ms,
+        "stats": run.stats,
+        "error": run.error,
+        "error_type": run.error_type,
+        "created_at": run.created_at,
+        "started_at": run.started_at,
+        "ended_at": run.ended_at,
+    }
+
+
+def _finding_dict(finding: Finding) -> dict:
+    return {
+        "id": finding.id,
+        "file_path": finding.file_path,
+        "line_start": finding.line_start,
+        "line_end": finding.line_end,
+        "severity": finding.severity,
+        "rule_key": finding.rule_key,
+        "message": finding.message,
+        "evidence": finding.evidence,
+        "posted": finding.posted,
+        "feedback": [
+            {"verdict": f.verdict, "actor": f.actor, "note": f.note} for f in finding.feedbacks
+        ],
+    }
+
+
+__all__ = ["app", "Repo", "Feedback"]

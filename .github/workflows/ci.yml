@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-and-gate:
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      DATABASE_URL: sqlite+aiosqlite:///./data/ci.db
+      QUEUE_BACKEND: memory
+      GITHUB_DRY_RUN: "true"
+      OCR_MODE: fake
+      RULES_DIR: ./rules
+      GITHUB_WEBHOOK_SECRET: ci-secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Contract tests
+        run: pytest -q
+
+      # Deterministic layer: must stay perfect, any drop blocks the merge.
+      - name: Bench (rules engine)
+        run: python scripts/bench.py --out eval/bench/last-run.json
+
+      - name: Gate (rules)
+        run: |
+          python scripts/gate.py \
+            --current eval/bench/last-run.json \
+            --baseline eval/bench/baseline.json \
+            --max-f1-drop 0.01 \
+            --min-f1 0.95
+
+      # Model layer: replayed from a recorded real OCR run, so CI needs no key
+      # and no network. A regression here means the prompt/model wiring changed.
+      - name: Bench (recorded OCR)
+        run: python scripts/bench.py --engine recorded --out eval/bench/ocr-last-run.json
+
+      - name: Gate (recorded OCR)
+        run: |
+          python scripts/gate.py \
+            --current eval/bench/ocr-last-run.json \
+            --baseline eval/bench/ocr-run.json \
+            --max-f1-drop 0.03 \
+            --min-f1 0.70

@@ -1,0 +1,72 @@
+version: 1
+owner: platform-team
+rules:
+  - key: py-eval-usage
+    severity: high
+    languages: [python]
+    paths: ["**/*.py"]
+    pattern: '\beval\s*\('
+    message: "对不可信输入使用 eval() 会直接导致任意代码执行；请改用 ast.literal_eval 或显式解析。"
+    fixtures:
+      positive: "result = eval(user_input)"
+      negative: "result = ast.literal_eval(user_input)"
+
+  - key: py-hardcoded-secret
+    severity: blocker
+    languages: [python]
+    paths: ["**/*.py"]
+    pattern: '(?i)(api[_-]?key|secret|password|token)\s*=\s*["''][A-Za-z0-9_\-\.]{12,}["'']'
+    message: "疑似硬编码凭据；请改为环境变量或密钥管理服务，并轮换已泄露的值。"
+    fixtures:
+      positive: 'api_key = "demo-key-1234567890abcdef"'
+      negative: 'api_key = os.environ["API_KEY"]'
+
+  - key: py-shell-true
+    severity: high
+    languages: [python]
+    paths: ["**/*.py"]
+    pattern: 'subprocess\.(run|call|Popen)\([^)]*shell\s*=\s*True'
+    message: "shell=True 会把参数交给 shell 解析，存在命令注入风险；请传参数列表并保持 shell=False。"
+    fixtures:
+      positive: 'subprocess.run(cmd, shell=True)'
+      negative: 'subprocess.run([cmd, arg], shell=False)'
+
+  - key: py-bare-except
+    severity: medium
+    languages: [python]
+    paths: ["**/*.py"]
+    pattern: '^\s*except\s*:\s*$'
+    message: "裸 except 会吞掉 SystemExit/KeyboardInterrupt 等信号；请捕获具体异常类型。"
+    fixtures:
+      positive: "except:"
+      negative: "except ValueError:"
+
+  - key: py-requests-no-timeout
+    severity: medium
+    languages: [python]
+    paths: ["**/*.py"]
+    pattern: 'requests\.(get|post|put|delete)\((?![^)]*timeout)'
+    message: "HTTP 调用未设置 timeout，可能永久挂起拖垮 worker；请显式传入 timeout。"
+    fixtures:
+      positive: "requests.get(url)"
+      negative: "requests.get(url, timeout=5)"
+
+  - key: py-pickle-loads
+    severity: high
+    languages: [python]
+    paths: ["**/*.py"]
+    pattern: 'pickle\.loads?\s*\('
+    message: "对不可信数据反序列化会在 load 阶段执行任意代码；请改用 json 或显式校验来源。"
+    fixtures:
+      positive: "return pickle.loads(raw)"
+      negative: "return json.loads(raw)"
+
+  - key: py-yaml-load-unsafe
+    severity: high
+    languages: [python]
+    paths: ["**/*.py"]
+    pattern: 'yaml\.load\s*\((?![^)]*Loader)'
+    message: "yaml.load 未指定 SafeLoader 时可构造任意对象；请使用 yaml.safe_load。"
+    fixtures:
+      positive: "return yaml.load(text)"
+      negative: "return yaml.load(text, Loader=SafeLoader)"

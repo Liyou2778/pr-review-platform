@@ -1,0 +1,415 @@
+{
+  "engine": "ocr",
+  "model": "deepseek-chat",
+  "provider": "deepseek",
+  "tokens_in": 85021,
+  "tokens_out": 3227,
+  "cost_usd": 0.026505,
+  "findings_by_case": {
+    "py-eval": [
+      {
+        "file_path": "app/mod.py",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "`eval(user_input)` executes arbitrary code. Use a safe parsing approach (e.g. `json`, `ast.literal_eval`) with validation.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "    return eval(user_input)"
+        }
+      }
+    ],
+    "py-secret": [
+      {
+        "file_path": "app/settings.py",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "A live API key is hardcoded in source. Move it to environment variables/secret management and rotate the exposed key.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "API_KEY = \"demo-key-1234567890abcdef\""
+        }
+      }
+    ],
+    "py-shell": [
+      {
+        "file_path": "app/tools.py",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "`subprocess.run(cmd, shell=True)` from untrusted input enables shell injection; pass an argument list and avoid `shell=True`.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "    subprocess.run(cmd, shell=True)"
+        }
+      }
+    ],
+    "py-bare-except": [
+      {
+        "file_path": "app/io.py",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "high",
+        "rule_key": "bug",
+        "message": "Bare `except:` swallows all exceptions, including `KeyboardInterrupt` and `SystemExit`. Catch specific exceptions, or at least `except Exception`, and log/re-raise.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "bug",
+          "suggestion_code": null,
+          "existing_code": "        except:"
+        }
+      }
+    ],
+    "py-http-timeout": [
+      {
+        "file_path": "app/client.py",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "medium",
+        "rule_key": "bug",
+        "message": "`requests.get` is called without a timeout, so a hung server can block this call indefinitely. Pass an explicit `timeout`.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "bug",
+          "suggestion_code": null,
+          "existing_code": "    return requests.get(url)"
+        }
+      }
+    ],
+    "py-pickle": [
+      {
+        "file_path": "app/cache.py",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "Deserializing untrusted data with `pickle.loads` allows arbitrary code execution. If `raw` can come from an external/untrusted source, use a safe format (e.g. JSON) instead.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "    return pickle.loads(raw)"
+        }
+      }
+    ],
+    "py-yaml": [
+      {
+        "file_path": "app/conf.py",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "`yaml.load(text)` without `SafeLoader` can execute arbitrary code on untrusted input. Use `yaml.safe_load(text)`.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "    return yaml.load(text)"
+        }
+      }
+    ],
+    "py-eval-shell": [
+      {
+        "file_path": "app/flow.py",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "`eval(raw)` on untrusted input is arbitrary code execution. Replace with a safe parser or an explicit allow-list of operations.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "    return eval(raw)"
+        }
+      },
+      {
+        "file_path": "app/flow.py",
+        "line_start": 4,
+        "line_end": 4,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "`subprocess.run(cmd, shell=True)` from unsanitized input enables shell injection. Pass an argument list without `shell=True`.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "    subprocess.run(cmd, shell=True)"
+        }
+      }
+    ],
+    "py-pickle-yaml": [
+      {
+        "file_path": "app/codec.py",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "`pickle.loads` on untrusted data allows arbitrary code execution; prefer a safe serialization format such as JSON.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "    return pickle.loads(raw)"
+        }
+      },
+      {
+        "file_path": "app/codec.py",
+        "line_start": 4,
+        "line_end": 4,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "`yaml.load(text)` without `SafeLoader` can instantiate arbitrary Python objects and execute code. Use `yaml.safe_load(text)` or pass `Loader=yaml.SafeLoader`.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "    return yaml.load(text)"
+        }
+      }
+    ],
+    "ts-dangerous-html": [
+      {
+        "file_path": "web/comp.tsx",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "high",
+        "rule_key": "security",
+        "message": "`dangerouslySetInnerHTML` renders raw HTML directly, which enables XSS if `html` contains user-controlled content. Sanitize the HTML (e.g. DOMPurify) before injecting, or render as text.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "+    <div dangerouslySetInnerHTML={{ __html: html }} />"
+        }
+      }
+    ],
+    "ts-innerhtml": [
+      {
+        "file_path": "web/dom.ts",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "high",
+        "rule_key": "security",
+        "message": "Assigning to `innerHTML` executes embedded scripts/markup and allows XSS when `v` comes from user input. Use `el.textContent = v` or sanitize the HTML first.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "+  el.innerHTML = v;"
+        }
+      }
+    ],
+    "ts-eval": [
+      {
+        "file_path": "web/run.ts",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "`eval()` on arbitrary input is a code-injection vulnerability and is prohibited. Remove eval and use a safe, explicit parser/whitelist of allowed operations.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "+  return eval(code);"
+        }
+      }
+    ],
+    "ts-token": [
+      {
+        "file_path": "web/api.ts",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "Hardcoded GitHub personal access token committed to source. Secrets must not be stored in the codebase — remove it and load from environment/config at build or runtime, and rotate the leaked token.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "+const token = \"tok_demo_1234567890abcdef\";"
+        }
+      }
+    ],
+    "ts-two-xss": [
+      {
+        "file_path": "web/view.tsx",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "high",
+        "rule_key": "security",
+        "message": "Unsanitized `dangerouslySetInnerHTML` allows XSS. Sanitize `html` before rendering or use normal React children (auto-escaped).",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "+    <div dangerouslySetInnerHTML={{ __html: html }} />"
+        }
+      },
+      {
+        "file_path": "web/view.tsx",
+        "line_start": 4,
+        "line_end": 4,
+        "severity": "high",
+        "rule_key": "security",
+        "message": "Directly inserting `userInput` via `innerHTML` is an XSS vulnerability. Use `node.textContent = userInput` or sanitize before insertion.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "+  node.innerHTML = userInput;"
+        }
+      }
+    ],
+    "java-exec": [
+      {
+        "file_path": "src/main/java/com/acme/Shell.java",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "Public method passing an externally supplied `cmd` to Runtime.exec — command injection risk. Restrict to a fixed command whitelist or avoid shell execution; also note exec() does not split arguments.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "    public void run(String cmd) throws Exception { Runtime.getRuntime().exec(cmd); }"
+        }
+      }
+    ],
+    "java-sql": [
+      {
+        "file_path": "src/main/java/com/acme/Repo.java",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "SQL injection: `id` is concatenated directly into the query. Use a PreparedStatement with a bind parameter instead of string concatenation.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "    void find(Statement stmt, String id) throws Exception { stmt.executeQuery(\"select * from t where id=\" + id); }"
+        }
+      }
+    ],
+    "java-password": [
+      {
+        "file_path": "src/main/java/com/acme/Config.java",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "Hardcoded production credential in source. This is a critical security issue; load it from a secret manager/env var and remove it from the repository.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "    private static final String password = \"Prod@123456\";"
+        }
+      }
+    ],
+    "java-printstack": [
+      {
+        "file_path": "src/main/java/com/acme/Service.java",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "high",
+        "rule_key": "bug",
+        "message": "`e` is not declared in this scope (no try/catch or parameter), so this won't compile. Additionally, printStackTrace() without a logger loses the stack trace context in production; use a logger and propagate/handle the exception properly.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "bug",
+          "suggestion_code": null,
+          "existing_code": "    void fail() { e.printStackTrace(); }"
+        }
+      }
+    ],
+    "java-exec-password": [
+      {
+        "file_path": "src/main/java/com/acme/Danger.java",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "Command execution with an unvalidated parameter — a command-injection sink. Also, the added lines are inserted before the existing `public class Danger {` declaration, so there are now two class declarations and the enclosing brace structure is broken (won't compile).",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "    void a(String cmd) throws Exception { Runtime.getRuntime().exec(cmd); }"
+        }
+      },
+      {
+        "file_path": "src/main/java/com/acme/Danger.java",
+        "line_start": 4,
+        "line_end": 4,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "Hardcoded secret literal in source; move to external secret configuration and rotate the exposed value.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "    private static final String secret = \"abcdef123456\";"
+        }
+      },
+      {
+        "file_path": "src/main/java/com/acme/Danger.java",
+        "line_start": 1,
+        "line_end": 1,
+        "severity": "blocker",
+        "rule_key": "bug",
+        "message": "Duplicate `public class Danger {` declaration (line 1 and line 3) makes the file uncompilable. In addition, the class is missing a closing brace, so even after removing the duplicate declaration the structure is broken. Also, the `void a(String cmd)` method is package-private dead code that is never called — either remove it or make it a legitimate, validated API.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "bug",
+          "suggestion_code": null,
+          "existing_code": "public class Danger {"
+        }
+      }
+    ],
+    "py-eval-timeout": [
+      {
+        "file_path": "app/mix.py",
+        "line_start": 2,
+        "line_end": 2,
+        "severity": "blocker",
+        "rule_key": "security",
+        "message": "`eval(raw)` on untrusted input is arbitrary code execution; use a safe parser instead.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "security",
+          "suggestion_code": null,
+          "existing_code": "    return eval(raw)"
+        }
+      },
+      {
+        "file_path": "app/mix.py",
+        "line_start": 4,
+        "line_end": 4,
+        "severity": "medium",
+        "rule_key": "bug",
+        "message": "`requests.get` is called without a timeout; a slow server can block indefinitely. Pass an explicit `timeout`.",
+        "evidence": {
+          "engine": "ocr",
+          "category": "bug",
+          "suggestion_code": null,
+          "existing_code": "    return requests.get(url)"
+        }
+      }
+    ]
+  },
+  "unmatched": []
+}
