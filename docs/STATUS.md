@@ -1,15 +1,17 @@
 # 项目状态（最终）
 
-> 2026-11-18。Docker 引擎可用（29.9.3），但 `postgres:16-alpine` / `python:3.12-slim`
-> 镜像受网络限制拉不下来；主链路走便携版 PG 17.6 + Redis 5，功能等价。
+> 2026-11-18。代码已推送到 <https://github.com/Liyou2778/pr-review-platform>（66 个文件）。
+> 真实评审已在 <https://github.com/Liyou2778/pr-review-demo/pull/1> 跑通：1 条 review + 4 条行内评论。
+> Docker 引擎可用（29.9.3），但 `postgres:16-alpine` / `python:3.12-slim` 受网络限制拉不下来；
+> 主链路走便携版 PG 17.6 + Redis 5，功能等价。
 
 ## 一、完成度
 
 | 阶段 | 内容 | 证据 |
 |---|---|---|
-| P0 | 平台骨架：验签、幂等、队列、worker、规则引擎、行号、去重、反馈、指标 | 23 tests |
+| P0 | 平台骨架：验签、幂等、队列、worker、规则引擎、行号、去重、反馈、指标 | 24 tests |
 | P1 | OCR + DeepSeek：workspace 克隆 → review → 归一化 → 落库 | e2e 19s / $0.019 |
-| P1.5 | 评论回写：单 review + N 行级评论、posted 标记、失败不丢结果 | 3 个契约测试 |
+| P1.5 | 评论回写：真实 PR 上 1 review + 4 行内评论；失败可补发 | demo PR #1 |
 | P2 | 20 用例 bench（Py/TS/Java）、两级门禁、录制回放、误报聚类、看板 | 见下表 |
 | P2.5 | 规则候选 draft→approved/rejected 人工门禁 | 契约测试 |
 
