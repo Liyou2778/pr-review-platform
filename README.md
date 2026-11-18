@@ -102,7 +102,8 @@ GitHub ──webhook(HMAC)──► FastAPI ──► 唯一约束去重 ──�
 | GET | `/api/runs?limit=&status=` | run 列表 |
 | GET | `/api/runs/{id}` | run 详情（含 findings） |
 | GET | `/api/runs/{id}/findings` | findings 列表 |
-| POST | `/api/runs/{id}/retry` | 失败重试（重新入队） |
+| POST | `/api/runs/{id}/retry` | 失败重试（重新入队、重新评审） |
+| POST | `/api/runs/{id}/post` | 只补发未投递的评论（不重新评审、不重复计费） |
 | POST | `/api/findings/{id}/feedback` | `false_positive｜fixed｜ignored｜agreed` |
 | GET | `/api/feedback/clusters` | 按规则聚类的误报（规则候选来源） |
 | POST | `/api/rules/candidates` | 提交规则候选（同规则只保留一个 draft） |
@@ -127,6 +128,20 @@ GitHub ──webhook(HMAC)──► FastAPI ──► 唯一约束去重 ──�
 | `costs` | 成本归集 | 一次 run 一条 |
 
 ---
+
+## 真实链路验证
+
+不是 mock：平台真的在一个 GitHub PR 上发了评审。
+
+- 演示 PR：<https://github.com/Liyou2778/pr-review-demo/pull/1>
+- 结果：**1 条 review + 4 条行内评论**（blocker / high / high / medium），带规则 key 与严重度标签
+- 证据截图：[docs/github-pr.png](docs/github-pr.png)
+
+![真实 PR 评论](docs/github-pr.png)
+
+这条链路验证了四件容易出错的事：webhook/replay 取到的 **head_sha 是真实 commit id**（否则 GitHub 返回
+`422 invalid $commitOID`）、评论按 **行号** 挂在正确位置、同一 finding **不重复发**、
+投递失败后可以 `POST /api/runs/{id}/post` **补发**（不重新评审、不重复计费）。
 
 ## 评测与看板
 
@@ -169,7 +184,7 @@ http://127.0.0.1:8210/dashboard
 |---|---|---|
 | P0 | webhook 验签/幂等、队列、worker、规则引擎、行号映射、去重、反馈、指标 | ✅ 完成 |
 | P1 | OCR CLI 接入（真实 DeepSeek）、git workspace 克隆、结果归一化、端到端落库 | ✅ 完成（2 findings / 19s / $0.019） |
-| P1.5 | GitHub 评论回写（单 review + N 行级评论、posted 标记、失败不丢结果） | ✅ 代码 + 契约测试完成；真实仓库需 PAT |
+| P1.5 | GitHub 评论回写（单 review + N 行级评论、posted 标记、失败可补发） | ✅ 真实 PR 跑通（4 条行内评论） |
 | P2 | 20 用例 bench（3 语言）、两级 CI 门禁、录制回放回归、误报聚类、成本看板 | ✅ 完成 |
 | P2.5 | 规则候选状态机（draft→approved/rejected）+ 人工门禁 | ✅ 完成 |
 

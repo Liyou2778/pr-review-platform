@@ -80,10 +80,41 @@ async def fetch_diff(
     if token:
         headers["Authorization"] = f"Bearer {token}"
     async with httpx.AsyncClient(follow_redirects=True, timeout=timeout_s) as client:
-        resp = await client.get(url, headers=headers)
+        try:
+            resp = await client.get(url, headers=headers)
+        except httpx.HTTPError as exc:
+            raise GitHubError(f"fetch diff transport error: {type(exc).__name__}: {exc}") from exc
     if resp.status_code >= 400:
         raise GitHubError(f"fetch diff failed: HTTP {resp.status_code} for {url}")
     return resp.text
+
+
+async def fetch_pull_request_meta(
+    repo_full_name: str, pr_number: int, token: str = "", timeout_s: float = 30.0
+) -> dict:
+    """Head/base SHAs for a PR.
+
+    A review comment needs a real commit id; hashing the diff is not one, and
+    GitHub rejects it with 422 "Variable $commitOID ... invalid value".
+    """
+    url = f"https://api.github.com/repos/{repo_full_name}/pulls/{pr_number}"
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "pr-review-platform/0.1"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        try:
+            resp = await client.get(url, headers=headers)
+        except httpx.HTTPError as exc:
+            raise GitHubError(f"fetch PR meta transport error: {type(exc).__name__}") from exc
+    if resp.status_code >= 400:
+        raise GitHubError(f"fetch PR meta failed: HTTP {resp.status_code}")
+    data = resp.json()
+    return {
+        "head_sha": str((data.get("head") or {}).get("sha") or ""),
+        "base_sha": str((data.get("base") or {}).get("sha") or ""),
+        "title": str(data.get("title") or ""),
+        "state": str(data.get("state") or ""),
+    }
 
 
 def build_review_payload(head_sha: str, findings: list[dict]) -> dict:
@@ -125,7 +156,12 @@ async def post_review(
         "User-Agent": "pr-review-platform/0.1",
     }
     async with httpx.AsyncClient(timeout=timeout_s) as client:
-        resp = await client.post(url, json=payload, headers=headers)
+        try:
+            resp = await client.post(url, json=payload, headers=headers)
+        except httpx.HTTPError as exc:
+            # A flaky network must surface as "review not delivered", never as
+            # "review failed" — the findings are already persisted.
+            raise GitHubError(f"post review transport error: {type(exc).__name__}: {exc}") from exc
     if resp.status_code >= 400:
         raise GitHubError(f"post review failed: HTTP {resp.status_code}: {resp.text[:300]}")
     return resp.json()

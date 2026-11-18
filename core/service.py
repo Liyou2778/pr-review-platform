@@ -148,10 +148,20 @@ async def claim_run(run_id: int) -> bool:
 
 
 async def _previous_dedup_keys(session: AsyncSession, repo_id: int, pr_number: int, run_id: int) -> set[str]:
+    """Keys seen in any earlier run of this PR.
+
+    This drives the ``new_findings`` metric only ("have we reported this before?").
+    Delivery uses a different question — "has this finding been *posted*?" — so
+    that a dry-run or a failed delivery can still be retried later.
+    """
     rows = await session.execute(
         select(Finding.dedup_key)
         .join(Run, Finding.run_id == Run.id)
-        .where(Run.repo_id == repo_id, Run.pr_number == pr_number, Finding.run_id != run_id)
+        .where(
+            Run.repo_id == repo_id,
+            Run.pr_number == pr_number,
+            Finding.run_id != run_id,
+        )
     )
     return {r[0] for r in rows.all()}
 
@@ -222,8 +232,21 @@ async def process_run(run_id: int) -> dict:
                     new_drafts.append(draft)
 
             comment_status = "skipped"
-            if new_drafts and not settings.github_dry_run and settings.github_token:
-                payload = build_review_payload(run.head_sha, [d.as_dict() for d in new_drafts])
+            to_post = [f for f in run.findings if not f.posted] + new_rows
+            if to_post and not settings.github_dry_run and settings.github_token:
+                payload = build_review_payload(
+                    run.head_sha,
+                    [
+                        {
+                            "file_path": row.file_path,
+                            "line_start": row.line_start,
+                            "severity": row.severity,
+                            "rule_key": row.rule_key,
+                            "message": row.message,
+                        }
+                        for row in to_post
+                    ],
+                )
                 try:
                     await post_review(
                         repo.full_name,
@@ -233,7 +256,7 @@ async def process_run(run_id: int) -> dict:
                         settings.github_api_base,
                     )
                     comment_status = "posted"
-                    for row in new_rows:
+                    for row in to_post:
                         row.posted = True
                 except GitHubError as exc:
                     # Findings are the product; a failed comment is a delivery
@@ -366,6 +389,50 @@ async def list_rule_candidates(
     if status:
         stmt = stmt.where(RuleCandidate.status == status)
     return list((await session.scalars(stmt)).all())
+
+
+async def post_run(run_id: int) -> dict:
+    """Deliver an existing run's unposted findings. No re-review, no re-cost.
+
+    This is the retry path for a failed comment delivery: the review result is
+    durable, the notification is replayable.
+    """
+    settings = get_settings()
+    async with SessionLocal() as session:
+        run = await session.get(Run, run_id)
+        if run is None:
+            raise ReviewError(f"run {run_id} not found", "run_missing")
+        repo = await session.get(Repo, run.repo_id)
+        pending = [f for f in run.findings if not f.posted]
+        if not pending:
+            return {"posted": 0, "status": (run.stats or {}).get("comment_status", "nothing_to_post")}
+        if not settings.github_token:
+            raise ReviewError("GITHUB_TOKEN is empty; cannot deliver review", "post_no_token")
+        payload = build_review_payload(
+            run.head_sha,
+            [
+                {
+                    "file_path": f.file_path,
+                    "line_start": f.line_start,
+                    "severity": f.severity,
+                    "rule_key": f.rule_key,
+                    "message": f.message,
+                }
+                for f in pending
+            ],
+        )
+        await post_review(
+            repo.full_name if repo else "",
+            run.pr_number,
+            payload,
+            settings.github_token,
+            settings.github_api_base,
+        )
+        for finding in pending:
+            finding.posted = True
+        run.stats = {**(run.stats or {}), "comment_status": "posted"}
+        await session.commit()
+        return {"posted": len(pending), "status": "posted"}
 
 
 async def overview(session: AsyncSession) -> dict:

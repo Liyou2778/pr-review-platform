@@ -93,6 +93,36 @@ async def test_posting_failure_keeps_findings_and_records_status(client, monkeyp
     assert all(finding["posted"] is False for finding in detail["findings"])
 
 
+async def test_post_run_delivers_findings_that_were_never_posted(client, monkeypatch):
+    """A dry-run (or failed delivery) must be replayable without re-reviewing."""
+    run_id = await _make_run(client, "acme/replay-post", 75, "b" * 40)
+    await run_once()
+    before = (await client.get(f"/api/runs/{run_id}")).json()
+    assert before["stats"]["comment_status"] == "skipped"
+    assert all(finding["posted"] is False for finding in before["findings"])
+
+    captured: dict = {}
+
+    async def fake_post(repo, pr, payload, token, api_base):
+        captured.update(payload=payload, repo=repo)
+        return {"id": 1}
+
+    monkeypatch.setattr("core.service.post_review", fake_post)
+    monkeypatch.setattr("core.service.get_settings", lambda: FakeSettings())
+
+    resp = await client.post(f"/api/runs/{run_id}/post")
+    assert resp.status_code == 200
+    assert resp.json()["posted"] == len(before["findings"])
+    assert len(captured["payload"]["comments"]) == len(before["findings"])
+
+    after = (await client.get(f"/api/runs/{run_id}")).json()
+    assert after["stats"]["comment_status"] == "posted"
+    assert all(finding["posted"] is True for finding in after["findings"])
+
+    again = await client.post(f"/api/runs/{run_id}/post")
+    assert again.json()["posted"] == 0
+
+
 async def test_rule_candidate_lifecycle(client):
     run_id = await _make_run(client, "acme/candidate", 74, "a" * 40)
     await run_once()

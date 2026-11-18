@@ -14,7 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core import analytics, service
-from core.adapters.github import fetch_diff, parse_webhook
+from core.adapters.github import GitHubError, fetch_diff, fetch_pull_request_meta, parse_webhook
+from core.adapters.reviewer import ReviewError
 from core.config import get_settings
 from core.db import get_session, init_db
 from core.models import Feedback, Finding, Repo, Run
@@ -170,13 +171,24 @@ async def replay(
             raise HTTPException(status_code=400, detail=f"cannot fetch diff: {exc}") from exc
 
     seed = diff or f"{body.repo_full_name}:{body.pr_number}:{body.head_sha or ''}"
-    head_sha = body.head_sha or hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
+    head_sha = body.head_sha
+    base_sha = body.base_sha
+    try:
+        meta = await fetch_pull_request_meta(
+            body.repo_full_name, body.pr_number, settings.github_token
+        )
+        head_sha = head_sha or meta.get("head_sha")
+        if base_sha == "base":
+            base_sha = meta.get("base_sha") or base_sha
+    except GitHubError:
+        meta = {}
+    head_sha = head_sha or hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
     repo = await service.ensure_repo(session, body.repo_full_name, clone_url=body.clone_url)
     run, created = await service.create_run(
         session,
         repo=repo,
         pr_number=body.pr_number,
-        base_sha=body.base_sha,
+        base_sha=base_sha,
         head_sha=head_sha,
         trigger=body.trigger,
         diff_text=diff,
@@ -232,6 +244,15 @@ async def retry_run(run_id: int, session: AsyncSession = Depends(get_session)) -
     await session.commit()
     await _enqueue(run.id)
     return {"run_id": run.id, "status": "queued"}
+
+
+@app.post("/api/runs/{run_id}/post")
+async def post_run_endpoint(run_id: int) -> dict:
+    """Replay comment delivery for an existing run (no re-review, no re-cost)."""
+    try:
+        return await service.post_run(run_id)
+    except ReviewError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/api/findings/{finding_id}/feedback")
