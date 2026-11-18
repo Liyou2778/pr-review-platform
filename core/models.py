@@ -47,6 +47,10 @@ class Repo(Base):
     clone_url: Mapped[str] = mapped_column(String(512), default="")
     default_branch: Mapped[str] = mapped_column(String(128), default="main")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Per-repo policy: only comment on findings at or above this severity.
+    min_severity: Mapped[str] = mapped_column(String(16), default="low")
+    # 0 = fall back to the global REPO_HOURLY_RUN_LIMIT.
+    max_runs_per_hour: Mapped[int] = mapped_column(Integer, default=0)
     token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(String(32), default=utcnow_iso)
 
@@ -113,6 +117,9 @@ class Finding(Base):
     evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     dedup_key: Mapped[str] = mapped_column(String(64), index=True)
     posted: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Set when a later run of the same PR no longer reports this finding.
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    resolved_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[str] = mapped_column(String(32), default=utcnow_iso)
 
     run: Mapped[Run] = relationship(back_populates="findings")

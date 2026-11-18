@@ -18,11 +18,19 @@ from core.db import engine
 
 PG_STATEMENTS = [
     "ALTER TABLE repos ADD COLUMN IF NOT EXISTS clone_url VARCHAR(512) NOT NULL DEFAULT ''",
+    "ALTER TABLE repos ADD COLUMN IF NOT EXISTS min_severity VARCHAR(16) NOT NULL DEFAULT 'low'",
+    "ALTER TABLE repos ADD COLUMN IF NOT EXISTS max_runs_per_hour INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE findings ADD COLUMN IF NOT EXISTS resolved BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE findings ADD COLUMN IF NOT EXISTS resolved_at VARCHAR(32)",
     "CREATE INDEX IF NOT EXISTS ix_runs_repo_pr ON runs (repo_id, pr_number)",
 ]
 
 SQLITE_STATEMENTS = [
     ("repos", "clone_url", "ALTER TABLE repos ADD COLUMN clone_url VARCHAR(512) NOT NULL DEFAULT ''"),
+    ("repos", "min_severity", "ALTER TABLE repos ADD COLUMN min_severity VARCHAR(16) NOT NULL DEFAULT 'low'"),
+    ("repos", "max_runs_per_hour", "ALTER TABLE repos ADD COLUMN max_runs_per_hour INTEGER NOT NULL DEFAULT 0"),
+    ("findings", "resolved", "ALTER TABLE findings ADD COLUMN resolved BOOLEAN NOT NULL DEFAULT 0"),
+    ("findings", "resolved_at", "ALTER TABLE findings ADD COLUMN resolved_at VARCHAR(32)"),
 ]
 
 SQLITE_INDEXES = [
@@ -51,7 +59,8 @@ async def main() -> int:
         else:
             for stmt in PG_STATEMENTS:
                 await conn.execute(text(stmt))
-                print(f"postgres: {stmt.split('ADD COLUMN')[1].split()[0]} ok")
+                kind = "index" if "INDEX" in stmt.upper() else "column"
+                print(f"postgres: {kind} ok")
     await engine.dispose()
     print("migrate done")
     return 0

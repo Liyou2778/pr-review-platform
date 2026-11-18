@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "pr-review-platform"
-    version: str = "0.1.0"
+    version: str = "0.2.0"
     # Accept both APP_ENV (compose/.env) and ENV (12-factor convention).
     env: str = Field("dev", validation_alias=AliasChoices("APP_ENV", "ENV"))
 
@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     max_diff_bytes: int = 2_000_000
     # A run stuck in 'running' longer than this is considered orphaned.
     run_stale_after_s: int = 900
+
+    # --- worker / delivery ---
+    worker_concurrency: int = 2
+    post_retries: int = 3
+    post_retry_base_s: float = 0.5
+    # 0 = unlimited; can be overridden per repo.
+    repo_hourly_run_limit: int = 0
+    # 0 = keep forever.
+    retention_days: int = 30
+    log_json: bool = False
 
     # --- model pricing (USD per 1M tokens, used to estimate cost) ---
     llm_price_in_per_1m: float = 0.27

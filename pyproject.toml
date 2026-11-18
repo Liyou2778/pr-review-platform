@@ -9,7 +9,7 @@ packages = ["apps", "apps.api", "apps.worker", "core", "core.adapters"]
 
 [project]
 name = "pr-review-platform"
-version = "0.1.0"
+version = "0.2.0"
 description = "Organization-level AI pull-request review platform (webhook -> queue -> review -> findings -> feedback loop)"
 requires-python = ">=3.11"
 dependencies = [

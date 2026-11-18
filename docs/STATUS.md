@@ -9,11 +9,12 @@
 
 | 阶段 | 内容 | 证据 |
 |---|---|---|
-| P0 | 平台骨架：验签、幂等、队列、worker、规则引擎、行号、去重、反馈、指标 | 32 tests |
+| P0 | 平台骨架：验签、幂等、队列、worker、规则引擎、行号、去重、反馈、指标 | 40 tests |
 | P1 | OCR + DeepSeek：workspace 克隆 → review → 归一化 → 落库 | e2e 19s / $0.019 |
 | P1.5 | 评论回写：真实 PR 上 1 review + 4 行内评论；失败可补发 | demo PR #1 |
 | P2 | 20 用例 bench（Py/TS/Java）、两级门禁、录制回放、误报聚类、看板 | 见下表 |
 | P2.5 | 规则候选 draft→approved/rejected 人工门禁 | 契约测试 |
+| P3 | 仓库策略、resolved 状态、投递重试、Prometheus、JSON 日志、保留脚本、worker 并发 | 8 个运维测试 |
 
 ## 二、实测数字
 

@@ -19,6 +19,7 @@ from sqlalchemy import or_, update
 from core.adapters.reviewer import ReviewError
 from core.config import get_settings
 from core.db import SessionLocal, engine, init_db
+from core.logging import configure_logging
 from core.models import Run, utcnow_iso
 from core.queue import get_queue
 from core.service import claim_run, process_run
@@ -103,24 +104,38 @@ async def run_once(timeout_s: float = 0.05) -> int | None:
     return run_id
 
 
+async def _worker_loop(slot: int) -> None:
+    """One pull loop. Errors are contained here so a broker hiccup cannot kill
+    the process: log, back off, keep pulling."""
+    while not _stop.is_set():
+        try:
+            processed = await run_once(timeout_s=2.0)
+        except Exception:  # noqa: BLE001 - worker must survive broker/DB errors
+            log.exception("worker slot %s: unhandled error, backing off", slot)
+            await asyncio.sleep(2.0)
+            continue
+        if processed is None:
+            await asyncio.sleep(0.2)
+
+
 async def main() -> None:
     settings = get_settings()
+    configure_logging(settings.log_json)
     settings.enforce_security()  # a worker with weak config must not start either
     await init_db()
     for warning in settings.boot_warnings():
         log.warning("boot: %s", warning)
     await recover_stale()
+    concurrency = max(1, settings.worker_concurrency)
     log.info(
-        "worker up: queue=%s storage=%s reviewer=%s dry_run=%s",
+        "worker up: queue=%s storage=%s reviewer=%s dry_run=%s concurrency=%s",
         settings.queue_backend,
         "sqlite" if settings.is_sqlite else "postgres",
         settings.ocr_mode,
         settings.github_dry_run,
+        concurrency,
     )
-    while not _stop.is_set():
-        processed = await run_once(timeout_s=2.0)
-        if processed is None:
-            await asyncio.sleep(0.2)
+    await asyncio.gather(*[_worker_loop(slot) for slot in range(concurrency)])
     await engine.dispose()
     log.info("worker stopped at %s", utcnow_iso())
 

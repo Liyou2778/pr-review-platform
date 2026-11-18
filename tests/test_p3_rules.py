@@ -29,6 +29,9 @@ class FakeSettings:
     github_dry_run = False
     github_token = "fake-token"
     github_api_base = "https://api.example.test"
+    post_retries = 3
+    post_retry_base_s = 0.01
+    repo_hourly_run_limit = 0
 
 
 async def _make_run(client, repo: str, pr: int, sha: str) -> int:

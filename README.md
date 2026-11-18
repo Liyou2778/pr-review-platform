@@ -112,6 +112,8 @@ GitHub ──webhook(HMAC)──► FastAPI ──► 唯一约束去重 ──�
 | GET | `/api/rules/candidates?status=` | 候选列表 |
 | POST | `/api/rules/candidates/{id}/decision` | `approved｜rejected`（人工门禁） |
 | PUT | `/api/repos/{owner}/{repo}/token` | 写入 repo 级 token（加密落库，只回显掩码） |
+| PUT | `/api/repos/{owner}/{repo}/policy` | 仓库策略：`min_severity` / 每小时预算 / 开关 |
+| GET | `/metrics` | Prometheus 指标 |
 | GET | `/api/stats` | run 状态分布、token/成本、P50/P95、反馈分布 |
 | GET | `/api/dashboard` | 看板数据（JSON） |
 | GET | `/dashboard` | 看板页面（服务端渲染，无前端构建） |
@@ -205,6 +207,19 @@ GITHUB_DRY_RUN=false
 > 注意：`API_TOKEN` 是服务级凭据，不是用户体系。要做多用户/多租户，下一步是引入 OIDC 或反向代理注入身份，
 > 当前设计只解决「谁可以调用变更接口」。
 
+## 可观测性与运维
+
+| 能力 | 用法 | 说明 |
+|---|---|---|
+| Prometheus 指标 | `GET /metrics` | runs/findings/按引擎 p95/成本/误报率，text exposition |
+| 请求追踪 | 响应头 `X-Request-Id` | 客户端可传入自定义 id，日志按 id 关联 |
+| 结构化日志 | `LOG_JSON=true` | 一行一个 JSON，直接接日志系统 |
+| 保留策略 | `python scripts/retention.py --days 30` | 默认 **dry-run**，加 `--apply` 才真删 |
+| 并发 worker | `WORKER_CONCURRENCY=4` | 原子 claim 保证不重复；单 loop 异常不拖垮进程 |
+| 投递重试 | `POST_RETRIES=3` | 指数退避；4xx 不重试（避免白烧时间） |
+| 仓库策略 | `PUT /api/repos/{owner}/{repo}/policy` | `min_severity` 只发高危、`max_runs_per_hour` 预算、`enabled` 开关 |
+| 已修复状态 | `finding.resolved` / `resolved_at` | 后续 run 不再报同一条时自动标记 |
+
 ## 状态
 
 | 阶段 | 内容 | 状态 |
@@ -214,6 +229,7 @@ GITHUB_DRY_RUN=false
 | P1.5 | GitHub 评论回写（单 review + N 行级评论、posted 标记、失败可补发） | ✅ 真实 PR 跑通（4 条行内评论） |
 | P2 | 20 用例 bench（3 语言）、两级 CI 门禁、录制回放回归、误报聚类、成本看板 | ✅ 完成 |
 | P2.5 | 规则候选状态机（draft→approved/rejected）+ 人工门禁 | ✅ 完成 |
+| P3 | 仓库策略（阈值/预算/开关）、resolved 状态、投递重试、Prometheus、JSON 日志、保留脚本、worker 并发 | ✅ 完成 |
 
 > **诚实声明**：默认引擎是自带的确定性规则层（正则 + 路径/语言约束），不是大模型；
 > 它的价值是给平台一条可离线、可复现的基线与门禁。真实模型能力看 bench 的

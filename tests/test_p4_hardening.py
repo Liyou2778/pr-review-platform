@@ -91,6 +91,9 @@ async def test_oversized_diff_fails_fast_with_typed_error(client, monkeypatch):
         github_dry_run = True
         github_token = ""
         github_api_base = "https://api.github.com"
+        post_retries = 1
+        post_retry_base_s = 0.01
+        repo_hourly_run_limit = 0
 
     monkeypatch.setattr("core.service.get_settings", lambda: TinyLimitSettings())
 

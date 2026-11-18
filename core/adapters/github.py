@@ -131,10 +131,17 @@ def build_review_payload(head_sha: str, findings: list[dict]) -> dict:
                 "body": body,
             }
         )
+    counts: dict[str, int] = {}
+    for item in findings:
+        counts[item["severity"]] = counts.get(item["severity"], 0) + 1
+    order = ("blocker", "high", "medium", "low")
+    breakdown = " · ".join(f"{name} {counts[name]}" for name in order if name in counts)
+    body = f"自动化评审：发现 {len(comments)} 条问题"
+    body = f"{body}（{breakdown}）。" if breakdown else body + "。"
     return {
         "commit_id": head_sha,
         "event": "COMMENT",
-        "body": f"自动化评审：发现 {len(comments)} 条问题。",
+        "body": body,
         "comments": comments,
     }
 

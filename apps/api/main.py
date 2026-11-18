@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +21,7 @@ from core.adapters.reviewer import ReviewError
 from core.adapters.workspace import WorkspaceError, ensure_allowed_clone_url
 from core.config import get_settings
 from core.db import get_session, init_db
+from core.logging import configure_logging
 from core.models import Feedback, Finding, Repo, Run
 from core.queue import get_queue
 from core.security import mask, seal_token, verify_api_token, verify_signature
@@ -56,6 +59,7 @@ class FeedbackRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging(settings.log_json)
     await init_db()
     settings.enforce_security()  # fail fast in prod, no-op in dev/test
     for warning in settings.boot_warnings():
@@ -69,33 +73,62 @@ app = FastAPI(title="PR Review Platform", version=settings.version, lifespan=lif
 
 @app.middleware("http")
 async def guard_requests(request: Request, call_next):
-    """Two guard rails that must exist before this is exposed to a network.
+    """Request id, read/write auth, body cap and access logging in one place.
 
-    1. Mutating ``/api/*`` calls require ``X-API-Token`` when ``API_TOKEN`` is
-       set; in non-dev environments an unset token is a hard refusal (503)
-       rather than an open door.
-    2. Declared request bodies above ``MAX_REQUEST_BYTES`` are rejected early.
-       Webhooks are exempt here because they are already HMAC-verified.
+    * ``/api/*`` and ``/dashboard`` require ``X-API-Token`` (or ``?token=``)
+      whenever ``API_TOKEN`` is configured.
+    * Mutating calls are additionally refused (503) in non-dev when no token
+      is configured at all — an open mutation surface is worse than downtime.
+    * ``X-Request-Id`` is echoed on every response so a user report can be
+      traced to log lines.
     """
     cfg = get_settings()
+    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
     path = request.url.path
-    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and path.startswith("/api/"):
-        if cfg.api_token:
-            if not verify_api_token(cfg.api_token, request.headers.get("x-api-token")):
-                return JSONResponse(
-                    {"detail": "invalid or missing X-API-Token"}, status_code=401
-                )
-        elif cfg.env not in ("dev", "test"):
+    started = time.perf_counter()
+
+    protected = path.startswith("/api/") or path.startswith("/dashboard")
+    if cfg.api_token and protected:
+        provided = request.headers.get("x-api-token") or request.query_params.get("token")
+        if not verify_api_token(cfg.api_token, provided):
             return JSONResponse(
-                {"detail": "API_TOKEN is not configured; refusing mutating calls"},
-                status_code=503,
+                {"detail": "invalid or missing X-API-Token"},
+                status_code=401,
+                headers={"X-Request-Id": request_id},
             )
+    elif (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and path.startswith("/api/")
+        and cfg.env not in ("dev", "test")
+    ):
+        return JSONResponse(
+            {"detail": "API_TOKEN is not configured; refusing mutating calls"},
+            status_code=503,
+            headers={"X-Request-Id": request_id},
+        )
 
     declared = request.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > cfg.max_request_bytes:
-        return JSONResponse({"detail": "request body too large"}, status_code=413)
+        return JSONResponse(
+            {"detail": "request body too large"},
+            status_code=413,
+            headers={"X-Request-Id": request_id},
+        )
 
-    return await call_next(request)
+    response = await call_next(request)
+    response.headers["X-Request-Id"] = request_id
+    log.info(
+        "%s %s -> %s",
+        request.method,
+        path,
+        response.status_code,
+        extra={
+            "request_id": request_id,
+            "status": response.status_code,
+            "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+        },
+    )
+    return response
 
 
 @app.get("/")
@@ -171,6 +204,8 @@ async def github_webhook(
         (payload.get("repository") or {}).get("default_branch", "main"),
         clone_url=pr_event.clone_url,
     )
+    if not await service.check_rate_limit(session, repo, settings):
+        raise HTTPException(status_code=429, detail="repo hourly run limit reached")
     run, created = await service.create_run(
         session,
         repo=repo,
@@ -222,6 +257,8 @@ async def replay(
         meta = {}
     head_sha = head_sha or hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
     repo = await service.ensure_repo(session, body.repo_full_name, clone_url=body.clone_url)
+    if not await service.check_rate_limit(session, repo, settings):
+        raise HTTPException(status_code=429, detail="repo hourly run limit reached")
     run, created = await service.create_run(
         session,
         repo=repo,
@@ -314,6 +351,41 @@ class RepoTokenRequest(BaseModel):
     token: str = Field(min_length=8)
 
 
+class RepoPolicyRequest(BaseModel):
+    min_severity: str | None = None
+    max_runs_per_hour: int | None = None
+    enabled: bool | None = None
+
+
+@app.put("/api/repos/{full_name:path}/policy")
+async def set_repo_policy(
+    full_name: str,
+    body: RepoPolicyRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Per-repo review policy: severity floor, hourly budget, kill switch."""
+    repo = await session.scalar(select(Repo).where(Repo.full_name == full_name))
+    if repo is None:
+        raise HTTPException(status_code=404, detail="repo not found")
+    if body.min_severity is not None:
+        if body.min_severity not in ("low", "medium", "high", "blocker"):
+            raise HTTPException(status_code=422, detail="min_severity must be low|medium|high|blocker")
+        repo.min_severity = body.min_severity
+    if body.max_runs_per_hour is not None:
+        if body.max_runs_per_hour < 0:
+            raise HTTPException(status_code=422, detail="max_runs_per_hour must be >= 0")
+        repo.max_runs_per_hour = body.max_runs_per_hour
+    if body.enabled is not None:
+        repo.enabled = body.enabled
+    await session.commit()
+    return {
+        "repo": repo.full_name,
+        "min_severity": repo.min_severity,
+        "max_runs_per_hour": repo.max_runs_per_hour,
+        "enabled": repo.enabled,
+    }
+
+
 @app.put("/api/repos/{full_name:path}/token")
 async def set_repo_token(
     full_name: str,
@@ -331,6 +403,48 @@ async def set_repo_token(
     repo.token_enc = seal_token(body.token)
     await session.commit()
     return {"repo": repo.full_name, "token_set": True, "token_hint": mask(body.token)}
+
+
+@app.get("/metrics")
+async def metrics_endpoint(session: AsyncSession = Depends(get_session)) -> Response:
+    """Prometheus text exposition, derived from the same numbers as the dashboard."""
+    data = await analytics.dashboard(session)
+    lines: list[str] = []
+
+    def add(name: str, help_text: str, samples: list[tuple[str, float]]) -> None:
+        lines.append(f"# HELP {name} {help_text}")
+        lines.append(f"# TYPE {name} gauge")
+        for labels, value in samples:
+            lines.append(f"{name}{labels} {value}")
+
+    add(
+        "pr_runs_total",
+        "Runs by status",
+        [(f'{{status="{status}"}}', count) for status, count in data["runs"]["by_status"].items()],
+    )
+    add(
+        "pr_findings_total",
+        "Findings by severity",
+        [
+            (f'{{severity="{severity}"}}', count)
+            for severity, count in data["findings_by_severity"].items()
+        ],
+    )
+    add(
+        "pr_run_latency_p95_ms",
+        "P95 run latency by engine",
+        [
+            (f'{{engine="{engine}"}}', stats["p95"])
+            for engine, stats in data["runs"]["latency_ms"]["by_engine"].items()
+        ],
+    )
+    add("pr_cost_usd_total", "Estimated model cost", [("", round(sum(r["cost_usd"] for r in data["cost_by_repo"]), 6))])
+    add(
+        "pr_false_positive_rate",
+        "Share of feedback marked false_positive",
+        [("", data["feedback"]["false_positive_rate"])],
+    )
+    return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 @app.get("/api/stats")
@@ -520,6 +634,8 @@ def _finding_dict(finding: Finding) -> dict:
         "message": finding.message,
         "evidence": finding.evidence,
         "posted": finding.posted,
+        "resolved": finding.resolved,
+        "resolved_at": finding.resolved_at,
         "feedback": [
             {"verdict": f.verdict, "actor": f.actor, "note": f.note} for f in finding.feedbacks
         ],

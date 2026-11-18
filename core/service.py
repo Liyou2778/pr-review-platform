@@ -7,8 +7,10 @@ drifts from it and the two disagree in production.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -175,6 +177,58 @@ def _delivery_token(repo: Repo | None, settings) -> str:
     return scoped or settings.github_token
 
 
+SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "blocker": 4}
+
+
+def meets_severity(severity: str, minimum: str) -> bool:
+    return SEVERITY_RANK.get(severity, 0) >= SEVERITY_RANK.get(minimum, 0)
+
+
+async def check_rate_limit(session: AsyncSession, repo: Repo, settings) -> bool:
+    """Per-repo hourly cap. Returns False when the repo is over its budget."""
+    limit = repo.max_runs_per_hour or settings.repo_hourly_run_limit
+    if limit <= 0:
+        return True
+    cutoff = (datetime.now(UTC) - timedelta(hours=1)).replace(microsecond=0).isoformat()
+    used = await session.scalar(
+        select(func.count())
+        .select_from(Run)
+        .where(Run.repo_id == repo.id, Run.created_at >= cutoff)
+    )
+    return int(used or 0) < limit
+
+
+async def _deliver_with_retry(
+    repo_full_name: str,
+    pr_number: int,
+    payload: dict,
+    token: str,
+    api_base: str,
+    retries: int = 3,
+    base_s: float = 0.5,
+) -> tuple[str, int]:
+    """Post a review with exponential backoff.
+
+    Returns ``(status, attempts)``. Transport/5xx failures are worth retrying;
+    a 4xx (bad token, bad commit) is not, and burns the whole timeout window
+    for nothing.
+    """
+    attempts = 0
+    last_error = ""
+    for attempt in range(1, max(1, retries) + 1):
+        attempts = attempt
+        try:
+            await post_review(repo_full_name, pr_number, payload, token, api_base)
+            return "posted", attempts
+        except GitHubError as exc:
+            last_error = str(exc)
+            retryable = "HTTP 4" not in last_error
+            if attempt >= retries or not retryable:
+                break
+            await asyncio.sleep(base_s * (2 ** (attempt - 1)))
+    return f"failed: {last_error}"[:180], attempts
+
+
 async def process_run(run_id: int) -> dict:
     """Execute one run end to end. Returns the stats dict (also persisted)."""
     settings = get_settings()
@@ -222,6 +276,32 @@ async def process_run(run_id: int) -> dict:
             drafts = normalize(result.findings, settings.max_findings_per_file)
             prior = await _previous_dedup_keys(session, repo.id, run.pr_number, run.id)
 
+            # A finding that disappeared in this run is considered resolved.
+            current_keys = {
+                make_dedup_key(
+                    repo.full_name, run.pr_number, draft.file_path, draft.line_start, draft.rule_key
+                )
+                for draft in drafts
+            }
+            stale_rows = (
+                await session.execute(
+                    select(Finding)
+                    .join(Run, Finding.run_id == Run.id)
+                    .where(
+                        Run.repo_id == repo.id,
+                        Run.pr_number == run.pr_number,
+                        Finding.run_id != run.id,
+                        Finding.resolved.is_(False),
+                    )
+                )
+            ).scalars().all()
+            resolved_count = 0
+            for stale in stale_rows:
+                if stale.dedup_key not in current_keys:
+                    stale.resolved = True
+                    stale.resolved_at = utcnow_iso()
+                    resolved_count += 1
+
             new_rows: list[Finding] = []
             new_drafts = []
             for draft in drafts:
@@ -247,7 +327,10 @@ async def process_run(run_id: int) -> dict:
                     new_drafts.append(draft)
 
             comment_status = "skipped"
-            to_post = [f for f in run.findings if not f.posted] + new_rows
+            delivery_attempts = 0
+            candidates = [f for f in run.findings if not f.posted] + new_rows
+            # Per-repo policy: below-threshold findings are stored, not commented.
+            to_post = [row for row in candidates if meets_severity(row.severity, repo.min_severity)]
             delivery_token = _delivery_token(repo, settings)
             if to_post and not settings.github_dry_run and delivery_token:
                 payload = build_review_payload(
@@ -263,21 +346,18 @@ async def process_run(run_id: int) -> dict:
                         for row in to_post
                     ],
                 )
-                try:
-                    await post_review(
-                        repo.full_name,
-                        run.pr_number,
-                        payload,
-                        delivery_token,
-                        settings.github_api_base,
-                    )
-                    comment_status = "posted"
+                comment_status, delivery_attempts = await _deliver_with_retry(
+                    repo.full_name,
+                    run.pr_number,
+                    payload,
+                    delivery_token,
+                    settings.github_api_base,
+                    retries=settings.post_retries,
+                    base_s=settings.post_retry_base_s,
+                )
+                if comment_status == "posted":
                     for row in to_post:
                         row.posted = True
-                except GitHubError as exc:
-                    # Findings are the product; a failed comment is a delivery
-                    # problem, not a review problem. Record it and keep going.
-                    comment_status = f"failed: {exc}"[:180]
             elif to_post and not settings.github_dry_run and not delivery_token:
                 # Only a *real* delivery attempt without a credential is a
                 # failure; a dry run is expected to have no token at all.
@@ -297,6 +377,9 @@ async def process_run(run_id: int) -> dict:
                 "latency_ms": latency_ms,
                 "dry_run": settings.github_dry_run,
                 "comment_status": comment_status,
+                "delivery_attempts": delivery_attempts,
+                "min_severity": repo.min_severity,
+                "resolved_findings": resolved_count,
                 "engine_meta": result.meta,
             }
             run.status = "completed"
