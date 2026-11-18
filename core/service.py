@@ -167,6 +167,28 @@ async def _previous_dedup_keys(session: AsyncSession, repo_id: int, pr_number: i
     return {r[0] for r in rows.all()}
 
 
+async def _posted_dedup_keys(
+    session: AsyncSession, repo_id: int, pr_number: int, run_id: int
+) -> set[str]:
+    """Keys already delivered by *other* runs of this PR.
+
+    Each run owns its own finding rows, so a row's ``posted`` flag is not
+    enough: without this check every new run would re-post its copy of the
+    same findings.
+    """
+    rows = await session.execute(
+        select(Finding.dedup_key)
+        .join(Run, Finding.run_id == Run.id)
+        .where(
+            Run.repo_id == repo_id,
+            Run.pr_number == pr_number,
+            Finding.run_id != run_id,
+            Finding.posted.is_(True),
+        )
+    )
+    return {r[0] for r in rows.all()}
+
+
 def _delivery_token(repo: Repo | None, settings) -> str:
     """Prefer the repo-scoped token; fall back to the process token in dev.
 
@@ -275,6 +297,7 @@ async def process_run(run_id: int) -> dict:
             result = await reviewer.review(ctx)
             drafts = normalize(result.findings, settings.max_findings_per_file)
             prior = await _previous_dedup_keys(session, repo.id, run.pr_number, run.id)
+            posted_prior = await _posted_dedup_keys(session, repo.id, run.pr_number, run.id)
 
             # A finding that disappeared in this run is considered resolved.
             current_keys = {
@@ -330,9 +353,26 @@ async def process_run(run_id: int) -> dict:
             delivery_attempts = 0
             candidates = [f for f in run.findings if not f.posted] + new_rows
             # Per-repo policy: below-threshold findings are stored, not commented.
-            to_post = [row for row in candidates if meets_severity(row.severity, repo.min_severity)]
+            # Cross-run delivery dedupe: never re-comment a key already delivered
+            # by another run of this PR.
+            to_post = [
+                row
+                for row in candidates
+                if not row.posted
+                and row.dedup_key not in posted_prior
+                and meets_severity(row.severity, repo.min_severity)
+            ]
+            # GitHub reviews are atomic: one unresolvable line rejects the whole
+            # review with 422. Only inline-comment lines that exist in this diff.
+            allowed_lines = {(line.path, line.line_no) for line in added} if added else None
+            inline_rows = [
+                row
+                for row in to_post
+                if allowed_lines is None or (row.file_path, row.line_start) in allowed_lines
+            ]
+            outside_diff = len(to_post) - len(inline_rows)
             delivery_token = _delivery_token(repo, settings)
-            if to_post and not settings.github_dry_run and delivery_token:
+            if inline_rows and not settings.github_dry_run and delivery_token:
                 payload = build_review_payload(
                     run.head_sha,
                     [
@@ -343,9 +383,11 @@ async def process_run(run_id: int) -> dict:
                             "rule_key": row.rule_key,
                             "message": row.message,
                         }
-                        for row in to_post
+                        for row in inline_rows
                     ],
                 )
+                if outside_diff:
+                    payload["body"] += f"（另有 {outside_diff} 条不在本次 diff 范围内，已记录未评论）"
                 comment_status, delivery_attempts = await _deliver_with_retry(
                     repo.full_name,
                     run.pr_number,
@@ -356,7 +398,7 @@ async def process_run(run_id: int) -> dict:
                     base_s=settings.post_retry_base_s,
                 )
                 if comment_status == "posted":
-                    for row in to_post:
+                    for row in inline_rows:
                         row.posted = True
             elif to_post and not settings.github_dry_run and not delivery_token:
                 # Only a *real* delivery attempt without a credential is a
@@ -378,6 +420,7 @@ async def process_run(run_id: int) -> dict:
                 "dry_run": settings.github_dry_run,
                 "comment_status": comment_status,
                 "delivery_attempts": delivery_attempts,
+                "outside_diff": outside_diff,
                 "min_severity": repo.min_severity,
                 "resolved_findings": resolved_count,
                 "engine_meta": result.meta,

@@ -127,6 +127,31 @@ async def test_resolved_state_marks_findings_fixed_in_later_run(client):
     assert run1_after["findings"][0]["resolved_at"]
 
 
+async def test_second_run_does_not_repost_already_delivered_findings(client, monkeypatch):
+    calls = {"n": 0}
+
+    async def fake_post(repo, pr, payload, token, api_base):
+        calls["n"] += 1
+        return {"id": 1}
+
+    monkeypatch.setattr("core.service.post_review", fake_post)
+    monkeypatch.setattr("core.service.get_settings", lambda: OpsSettings())
+
+    first = await _replay(client, "acme/norepost", 7, "8" * 40, FIX)
+    await _drain()
+    assert calls["n"] == 1
+    first_detail = (await client.get(f"/api/runs/{first.json()['run_id']}")).json()
+    assert first_detail["stats"]["comment_status"] == "posted"
+
+    second = await _replay(client, "acme/norepost", 7, "9" * 40, FIX)
+    await _drain()
+    assert calls["n"] == 1, "second run must not re-post the same finding"
+
+    detail = (await client.get(f"/api/runs/{second.json()['run_id']}")).json()
+    assert detail["stats"]["comment_status"] == "skipped"
+    assert detail["stats"]["new_findings"] == 0
+
+
 async def test_delivery_retries_with_backoff(client, monkeypatch):
     from core.adapters.github import GitHubError
 

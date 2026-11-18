@@ -108,14 +108,19 @@ async def test_repo_scoped_token_is_preferred_for_delivery(client, monkeypatch):
         json={"repo_full_name": "acme/scoped", "pr_number": 5, "diff": DIFF, "head_sha": "3" * 40},
     )
     run_id = second.json()["run_id"]
+    first_id = first.json()["run_id"]
     # The first replay left a queued run too; drain until the queue is empty.
     for _ in range(5):
         if await run_once() is None:
             break
 
-    detail = (await client.get(f"/api/runs/{run_id}")).json()
+    detail = (await client.get(f"/api/runs/{first_id}")).json()
     assert detail["stats"]["comment_status"] == "posted"
     assert capture["token"] == "repo-token-123456"
+
+    # The second run sees the same findings already delivered by the first run.
+    second_detail = (await client.get(f"/api/runs/{run_id}")).json()
+    assert second_detail["stats"]["comment_status"] == "skipped"
 
 
 async def test_production_configuration_fails_fast():
