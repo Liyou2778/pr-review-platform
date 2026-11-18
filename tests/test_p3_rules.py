@@ -8,8 +8,9 @@ someone refactors, and it does not need a live token to verify.
 
 from __future__ import annotations
 
-from apps.worker.main import run_once
 from conftest import ROOT
+
+from apps.worker.main import run_once
 
 PY_DIFF = """diff --git a/app/demo.py b/app/demo.py
 --- a/app/demo.py
@@ -24,6 +25,7 @@ class FakeSettings:
     ocr_mode = "fake"
     rules_path = ROOT / "rules"
     max_findings_per_file = 10
+    max_diff_bytes = 2_000_000
     github_dry_run = False
     github_token = "fake-token"
     github_api_base = "https://api.example.test"

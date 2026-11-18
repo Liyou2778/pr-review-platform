@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
-from pathlib import Path
 
 from core.tmp import workdir
 
@@ -43,7 +42,7 @@ async def _git(args: list[str], cwd: str | None = None, timeout_s: float = 300.0
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         proc.kill()
         raise WorkspaceError(f"git {args[0]} timed out", "git_timeout") from exc
     if proc.returncode != 0:

@@ -15,14 +15,14 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 os.chdir(ROOT)
 
-from core.tmp import workdir  # noqa: E402
 from dotenv import load_dotenv  # noqa: E402
+
+from core.tmp import workdir  # noqa: E402
 
 load_dotenv(".env")
 

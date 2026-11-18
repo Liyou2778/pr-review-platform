@@ -20,8 +20,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.rules import Rule
 from core.review import FindingDraft, iter_added_lines
+from core.rules import Rule
 from core.tmp import TMP_ROOT
 
 log = logging.getLogger(__name__)
@@ -234,7 +234,7 @@ class OcrReviewer:
                 raise ReviewError(f"ocr binary not found: {self.command}", "ocr_missing") from exc
             try:
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self.timeout_s)
-            except asyncio.TimeoutError as exc:
+            except TimeoutError as exc:
                 proc.kill()
                 raise ReviewError(f"ocr timed out after {self.timeout_s}s", "ocr_timeout") from exc
             if proc.returncode != 0:

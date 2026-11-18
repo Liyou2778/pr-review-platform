@@ -16,13 +16,14 @@ Design notes (kept here because they are interview answers):
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
     Boolean,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -34,7 +35,7 @@ from core.db import Base
 
 
 def utcnow_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 class Repo(Base):
@@ -70,6 +71,8 @@ class Run(Base):
     __tablename__ = "runs"
     __table_args__ = (
         UniqueConstraint("repo_id", "pr_number", "head_sha", name="uq_run_head"),
+        # Dedupe queries look up "all findings of this PR" on every run.
+        Index("ix_runs_repo_pr", "repo_id", "pr_number"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -90,7 +93,7 @@ class Run(Base):
     ended_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     repo: Mapped[Repo] = relationship(lazy="selectin")
-    findings: Mapped[list["Finding"]] = relationship(
+    findings: Mapped[list[Finding]] = relationship(
         back_populates="run", cascade="all, delete-orphan", lazy="selectin"
     )
 
@@ -113,7 +116,7 @@ class Finding(Base):
     created_at: Mapped[str] = mapped_column(String(32), default=utcnow_iso)
 
     run: Mapped[Run] = relationship(back_populates="findings")
-    feedbacks: Mapped[list["Feedback"]] = relationship(
+    feedbacks: Mapped[list[Feedback]] = relationship(
         back_populates="finding", cascade="all, delete-orphan", lazy="selectin"
     )
 

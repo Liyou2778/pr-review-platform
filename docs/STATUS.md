@@ -9,7 +9,7 @@
 
 | 阶段 | 内容 | 证据 |
 |---|---|---|
-| P0 | 平台骨架：验签、幂等、队列、worker、规则引擎、行号、去重、反馈、指标 | 24 tests |
+| P0 | 平台骨架：验签、幂等、队列、worker、规则引擎、行号、去重、反馈、指标 | 27 tests |
 | P1 | OCR + DeepSeek：workspace 克隆 → review → 归一化 → 落库 | e2e 19s / $0.019 |
 | P1.5 | 评论回写：真实 PR 上 1 review + 4 行内评论；失败可补发 | demo PR #1 |
 | P2 | 20 用例 bench（Py/TS/Java）、两级门禁、录制回放、误报聚类、看板 | 见下表 |
@@ -45,6 +45,7 @@
 | `docs/environment.md` | 环境安装与踩坑（PG/Redis/OCR/模型） |
 | `docs/demo-script.md` | 2 分钟演示脚本 |
 | `docs/resume.md` | 简历 bullet（中文/英文）+ 诚实边界 |
+| `docs/review-2026-11-18.md` | 交叉检查报告：已修 5 项 + P0/P1/P2 backlog |
 | `eval/bench/cases.json` | 20 个标注用例 |
 | `eval/bench/recorded-ocr.json` | 真实模型录制输出（CI 无 key 回归） |
 | `.github/workflows/ci.yml` | 测试 + 两级 bench + 门禁 |

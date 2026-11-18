@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import json
 
-from apps.worker.main import run_once
-from core.rules import load_rules
-from core.review import iter_added_lines
-
 from conftest import ROOT, delivery_headers, pr_payload
+
+from apps.worker.main import run_once
+from core.review import iter_added_lines
+from core.rules import load_rules
+
 PY_DIFF = """diff --git a/app/demo.py b/app/demo.py
 --- a/app/demo.py
 +++ b/app/demo.py

@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core import metrics as metrics_mod
 from core.adapters.github import (
     GitHubError,
-    PullRequestEvent,
     build_review_payload,
     fetch_diff,
     post_review,
@@ -191,6 +190,12 @@ async def process_run(run_id: int) -> dict:
                 added = []
             else:
                 diff = run.diff_text or await fetch_diff(repo.full_name, run.pr_number)
+                diff_bytes = len(diff.encode("utf-8"))
+                if diff_bytes > settings.max_diff_bytes:
+                    raise ReviewError(
+                        f"diff is {diff_bytes} bytes, over the {settings.max_diff_bytes} limit",
+                        "diff_too_large",
+                    )
                 added = iter_added_lines(diff)
 
             rules = load_rules(settings.rules_path)

@@ -24,6 +24,9 @@ import yaml
 
 log = logging.getLogger(__name__)
 
+# (dir -> (mtime, rules)); see load_rules()
+_CACHE: dict[str, tuple[float, list[Rule]]] = {}
+
 LANG_BY_EXT = {
     ".py": "python",
     ".ts": "typescript",
@@ -75,17 +78,29 @@ def _glob_match(path: str, glob: str) -> bool:
     pattern = glob.replace("\\", "/")
     if pattern.startswith("./"):
         pattern = pattern[2:]
-    if pattern.startswith("**/"):
-        if fnmatch.fnmatchcase(path, pattern[3:]):
-            return True
+    if pattern.startswith("**/") and fnmatch.fnmatchcase(path, pattern[3:]):
+        return True
     return fnmatch.fnmatchcase(path, pattern) or fnmatch.fnmatchcase(path, pattern.replace("**/", ""))
 
 
 def load_rules(rules_dir: Path | str) -> list[Rule]:
+    """Load and cache rules by directory mtime.
+
+    The worker used to re-read 9 YAML files on every run.  Caching by mtime
+    keeps rule edits live (touch the file, next run reloads) without paying
+    disk I/O per review.
+    """
     root = Path(rules_dir)
     if not root.exists():
         log.warning("rules dir %s does not exist; running with zero rules", root)
         return []
+
+    cache_key = str(root.resolve())
+    latest_mtime = max((p.stat().st_mtime for p in root.rglob("*.y*ml")), default=0.0)
+    cached = _CACHE.get(cache_key)
+    if cached is not None and cached[0] == latest_mtime:
+        return cached[1]
+
     rules: list[Rule] = []
     for path in sorted(root.rglob("*.y*ml")):
         try:
@@ -112,4 +127,9 @@ def load_rules(rules_dir: Path | str) -> list[Rule]:
                 )
             )
     log.info("loaded %d rules from %s", len(rules), root)
+    _CACHE[cache_key] = (latest_mtime, rules)
     return rules
+
+
+def clear_rule_cache() -> None:
+    _CACHE.clear()

@@ -10,7 +10,6 @@ Usage:  python scripts/migrate.py
 from __future__ import annotations
 
 import asyncio
-import sys
 
 from sqlalchemy import text
 
@@ -19,10 +18,15 @@ from core.db import engine
 
 PG_STATEMENTS = [
     "ALTER TABLE repos ADD COLUMN IF NOT EXISTS clone_url VARCHAR(512) NOT NULL DEFAULT ''",
+    "CREATE INDEX IF NOT EXISTS ix_runs_repo_pr ON runs (repo_id, pr_number)",
 ]
 
 SQLITE_STATEMENTS = [
     ("repos", "clone_url", "ALTER TABLE repos ADD COLUMN clone_url VARCHAR(512) NOT NULL DEFAULT ''"),
+]
+
+SQLITE_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_runs_repo_pr ON runs (repo_id, pr_number)",
 ]
 
 
@@ -41,6 +45,9 @@ async def main() -> int:
                     print(f"sqlite: added {table}.{column}")
                 else:
                     print(f"sqlite: {table}.{column} ok")
+            for stmt in SQLITE_INDEXES:
+                await conn.execute(text(stmt))
+            print("sqlite: indexes ok")
         else:
             for stmt in PG_STATEMENTS:
                 await conn.execute(text(stmt))

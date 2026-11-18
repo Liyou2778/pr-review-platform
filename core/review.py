@@ -85,7 +85,7 @@ def iter_added_lines(diff: str) -> list[AddedLine]:
 
 
 def make_dedup_key(repo: str, pr_number: int, path: str, line: int, rule_key: str) -> str:
-    raw = f"{repo}|{pr_number}|{path}|{line}|{rule_key}".encode("utf-8")
+    raw = f"{repo}|{pr_number}|{path}|{line}|{rule_key}".encode()
     return hashlib.sha256(raw).hexdigest()[:40]
 
 

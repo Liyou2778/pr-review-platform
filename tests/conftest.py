@@ -8,10 +8,8 @@ line numbers) are storage-agnostic, so this is a valid fast lane.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import tempfile
 from pathlib import Path
 
 from core.tmp import workdir

@@ -12,8 +12,9 @@ import asyncio
 import logging
 import signal
 import sys
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import update
+from sqlalchemy import or_, update
 
 from core.adapters.reviewer import ReviewError
 from core.config import get_settings
@@ -31,10 +32,26 @@ log = logging.getLogger("worker")
 _stop = asyncio.Event()
 
 
-async def recover_stale() -> int:
+async def recover_stale(stale_after_s: int | None = None) -> int:
+    """Re-queue runs abandoned by a crashed worker.
+
+    Only runs that have been ``running`` for longer than the threshold are
+    recovered.  Resetting *all* running rows would let a second worker steal
+    jobs that the first worker is still executing — a bug that only shows up
+    when you scale to N workers, which is exactly when it hurts.
+    """
+    threshold = stale_after_s if stale_after_s is not None else get_settings().run_stale_after_s
+    cutoff = (datetime.now(UTC) - timedelta(seconds=threshold)).replace(
+        microsecond=0
+    ).isoformat()
     async with SessionLocal() as session:
         result = await session.execute(
-            update(Run).where(Run.status == "running").values(status="queued", started_at=None)
+            update(Run)
+            .where(
+                Run.status == "running",
+                or_(Run.started_at.is_(None), Run.started_at < cutoff),
+            )
+            .values(status="queued", started_at=None)
         )
         await session.commit()
     count = int(result.rowcount or 0)

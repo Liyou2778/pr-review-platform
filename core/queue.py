@@ -52,7 +52,7 @@ class MemoryQueue:
     async def pop(self, timeout_s: float = 5.0) -> int | None:
         try:
             return await asyncio.wait_for(self._get().get(), timeout=timeout_s)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
 

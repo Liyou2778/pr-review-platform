@@ -6,10 +6,10 @@ meaningful if the TP/FP/FN definition is pinned by a test.
 
 from __future__ import annotations
 
+from conftest import ROOT
+
 from apps.worker.main import run_once
 from core.bench import TruthItem, load_cases, match
-
-from conftest import ROOT
 
 PY_DIFF = """diff --git a/app/demo.py b/app/demo.py
 --- a/app/demo.py

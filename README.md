@@ -206,6 +206,21 @@ http://127.0.0.1:8210/dashboard
 
 更完整的取舍记录见 [docs/adr/](docs/adr/)：两层引擎、幂等与去重的拆分、队列与数据库的关系。
 
+## 架构决策记录（ADR）
+
+代码会变，决策的约束不该丢。每个 ADR 记录「当时有哪些选项、为什么选这个、代价是什么」，
+而不是事后补一段解释。完整列表见 [docs/adr/](docs/adr/)。
+
+| 编号 | 决策 | 核心权衡 | 代价 |
+|---|---|---|---|
+| [0001](docs/adr/0001-two-tier-engines.md) | 规则引擎与模型引擎并存 | 规则层零成本、可复现，做基线与 CI 门禁；模型层做语义 | 两套 severity 词表要映射，规则要带 fixtures 回归 |
+| [0002](docs/adr/0002-idempotency-vs-dedupe.md) | 幂等与去重拆成三层 | webhook 幂等、run 唯一、评论去重各自有独立事实来源 | 多一列 `posted` 状态和一个补发接口 |
+| [0003](docs/adr/0003-queue-is-an-optimization.md) | 队列是优化，DB 是事实来源 | broker 故障只影响延迟，不丢任务；本地无需 Redis | 多一次 DB 轮询；多 worker 要注意 claim 竞争 |
+
+**什么值得写 ADR**：有真实取舍（两个方案都能 work）、写清后果（包括代价）、不依赖当时的口头讨论。
+反例：「我们用 FastAPI」不是决策，「webframework 选 FastAPI 因为 async + Pydantic 校验 + OpenAPI 自动生成，
+代价是同步代码要写成 async」才是。
+
 ---
 
 ## 目录

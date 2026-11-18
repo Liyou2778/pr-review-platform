@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     ocr_home: str = "./tools/ocrhome"
     rules_dir: str = "./rules"
     max_findings_per_file: int = 10
+    # Guard rails: a 50MB diff would OOM the worker before any review happens.
+    max_diff_bytes: int = 2_000_000
+    # A run stuck in 'running' longer than this is considered orphaned.
+    run_stale_after_s: int = 900
 
     # --- model pricing (USD per 1M tokens, used to estimate cost) ---
     llm_price_in_per_1m: float = 0.27
