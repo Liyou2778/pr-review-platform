@@ -1,5 +1,7 @@
 # PR Review Platform
 
+[![ci](https://github.com/Liyou2778/pr-review-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Liyou2778/pr-review-platform/actions/workflows/ci.yml)
+
 > 把单机 AI 评审 CLI，做成**组织级服务**：Webhook → 队列 → 评审 → 行级评论 → 指标 → 反馈闭环。
 > 目标不是「再写一个 AI 评审」，而是解决它进不了 CI 的三件事：**不可度量、不可治理、不敢全量开**。
 
@@ -201,6 +203,8 @@ http://127.0.0.1:8210/dashboard
 3. **为什么评论失败不算 run 失败？** 评审结果比通知重要；通知可以重放，评审结果丢了要重花钱。
 4. **为什么 dry-run 是默认？** 写操作的默认值决定事故半径。默认不写，打开要显式配置。
 5. **为什么规则要带 fixtures？** 否则改规则就是「感觉变好了」，无法回归。
+
+更完整的取舍记录见 [docs/adr/](docs/adr/)：两层引擎、幂等与去重的拆分、队列与数据库的关系。
 
 ---
 

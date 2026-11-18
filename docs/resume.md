@@ -2,6 +2,9 @@
 
 > 规则：每条 bullet 都要能被面试官追问到「怎么测的、样本多大、基线是什么」。
 > 下面所有数字都来自本仓库的实测输出，复现命令在括号里。
+>
+> 公开证据：仓库 <https://github.com/Liyou2778/pr-review-platform>（CI 绿）、
+> 真实评审 PR <https://github.com/Liyou2778/pr-review-demo/pull/1>（1 review + 4 行内评论）。
 
 ## 一、中文版（主项目，4 条）
 
@@ -10,7 +13,7 @@
 > - 把单机评审 CLI 做成组织级服务：GitHub Webhook HMAC 验签 + `delivery_id` 幂等 + Redis 队列 + worker 原子 claim，`(repo, pr, head_sha)` 唯一约束保证重投不重跑，跨 run `dedup_key` 去重避免重复评论；规则引擎 5 个 run/12 条 findings，P95 处理 37ms。（`pytest -q`、`GET /api/dashboard`）
 > - 接入上游 `open-code-review` 与 DeepSeek：自建 git workspace 克隆、结果归一化（`critical→blocker`、`content/start_line` 映射、severity 词表对齐）与成本估算，单 PR 端到端 19s、62k/1.9k tokens、$0.0189。（`python scripts/e2e_ocr.py`）
 > - 建 20 用例标注 bench（Python/TypeScript/Java）与两级 CI 门禁：确定性引擎 F1 1.000（`tp=25 fp=0 fn=0`），真实模型录制回归 P=0.769 / R=0.800 / F1=0.784，F1 下降超阈值即阻断合并；23 个契约测试在 SQLite 与 Postgres 双方言通过。（`scripts/bench.py`、`scripts/gate.py`）
-> - 设计误报闭环：反馈落库 → 按 `rule_key` 聚类 → 规则候选 `draft→approved/rejected` 人工门禁；评论投递失败不影响评审结果（findings 先落库、`comment_status` 单独记录）。
+> - 设计误报闭环：反馈落库 → 按 `rule_key` 聚类 → 规则候选 `draft→approved/rejected` 人工门禁；评论投递失败不影响评审结果（findings 先落库、`comment_status` 单独记录，`POST /api/runs/{id}/post` 可补发、不重复计费）。
 
 ## 二、英文版
 
